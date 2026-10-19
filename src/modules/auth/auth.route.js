@@ -6,4 +6,5 @@ const { loginSchema } = require('./auth.validation');
 
 router.post('/login', validate(loginSchema), authController.login);
 
+
 module.exports = router;

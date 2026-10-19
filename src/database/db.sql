@@ -1,3 +1,4 @@
+-- Target: MySQL 8.0.16+ / MySQL 8.4 LTS (InnoDB)
 CREATE DATABASE IF NOT EXISTS coffee_pos
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
@@ -10,7 +11,6 @@ SET time_zone = '+00:00';
 
 -- ==========================================================
 -- 1. USERS
--- Generate password_hash using bcrypt/Argon2 in the backend.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -24,13 +24,14 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ON UPDATE CURRENT_TIMESTAMP,
 
-  UNIQUE KEY uq_users_email (email)
+  UNIQUE KEY uq_users_email (email),
+  CONSTRAINT chk_users_name CHECK (CHAR_LENGTH(TRIM(name)) > 0),
+  CONSTRAINT chk_users_email CHECK (CHAR_LENGTH(TRIM(email)) > 0)
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
 -- 2. SETTINGS
--- One row only. Configure exchange_rate before accepting KHR.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS settings (
   id TINYINT UNSIGNED PRIMARY KEY,
@@ -64,13 +65,13 @@ CREATE TABLE IF NOT EXISTS categories (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ON UPDATE CURRENT_TIMESTAMP,
 
-  UNIQUE KEY uq_categories_name (name)
+  UNIQUE KEY uq_categories_name (name),
+  CONSTRAINT chk_categories_name CHECK (CHAR_LENGTH(TRIM(name)) > 0)
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
 -- 4. PRODUCTS
--- Extra Shot/Topping uses product_type = 'ADDON'.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS products (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -88,14 +89,13 @@ CREATE TABLE IF NOT EXISTS products (
   KEY idx_products_category (category_id),
 
   CONSTRAINT fk_products_category
-    FOREIGN KEY (category_id) REFERENCES categories(id)
+    FOREIGN KEY (category_id) REFERENCES categories(id),
+  CONSTRAINT chk_products_name CHECK (CHAR_LENGTH(TRIM(name)) > 0)
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
 -- 5. PRODUCT VARIANTS
--- Every sellable product needs at least one variant.
--- Examples: Iced Medium, Hot Large, Single Shot.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS product_variants (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -113,16 +113,16 @@ CREATE TABLE IF NOT EXISTS product_variants (
   UNIQUE KEY uq_variants_product_name (product_id, name),
 
   CONSTRAINT fk_variants_product
-    FOREIGN KEY (product_id) REFERENCES products(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+    ON DELETE CASCADE,
 
+  CONSTRAINT chk_variants_name CHECK (CHAR_LENGTH(TRIM(name)) > 0),
   CONSTRAINT chk_variants_price CHECK (price >= 0)
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
--- 6. INGREDIENTS (Updated: added current_stock)
--- Use the same base unit in recipes and stock movements.
--- Update current_stock inside the same DB transaction as stock_movements.
+-- 6. INGREDIENTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS ingredients (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -137,14 +137,14 @@ CREATE TABLE IF NOT EXISTS ingredients (
 
   UNIQUE KEY uq_ingredients_name (name),
 
+  CONSTRAINT chk_ingredients_name CHECK (CHAR_LENGTH(TRIM(name)) > 0),
   CONSTRAINT chk_ingredients_minimum
-    CHECK (minimum_stock >= 0)
+    CHECK (minimum_stock >= 0 AND current_stock >= 0)
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
 -- 7. RECIPES
--- quantity = ingredient quantity for one unit of a variant.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS recipes (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -170,8 +170,7 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 
 -- ==========================================================
--- 8. SHIFTS (Updated: added expected_cash_usd & expected_cash_khr)
--- Only one OPEN shift per user.
+-- 8. SHIFTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS shifts (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -200,6 +199,8 @@ CREATE TABLE IF NOT EXISTS shifts (
   CONSTRAINT chk_shifts_cash CHECK (
     opening_cash_usd >= 0
     AND opening_cash_khr >= 0
+    AND (expected_cash_usd IS NULL OR expected_cash_usd >= 0)
+    AND (expected_cash_khr IS NULL OR expected_cash_khr >= 0)
     AND (closing_cash_usd IS NULL OR closing_cash_usd >= 0)
     AND (closing_cash_khr IS NULL OR closing_cash_khr >= 0)
   ),
@@ -228,10 +229,7 @@ CREATE TABLE IF NOT EXISTS shifts (
 
 
 -- ==========================================================
--- 9. ORDERS (Updated: added queue_no, discount_type, discount_value)
--- All order amounts are USD.
--- subtotal = item totals + add-on totals.
--- total is calculated by MySQL.
+-- 9. ORDERS (Fixed: DB-01, DB-08, NEW-01, NEW-02)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS orders (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -282,12 +280,34 @@ CREATE TABLE IF NOT EXISTS orders (
   CONSTRAINT fk_orders_cancelled_by
     FOREIGN KEY (cancelled_by) REFERENCES users(id),
 
+  CONSTRAINT chk_orders_table CHECK (
+    (order_type = 'DINE_IN' AND (table_no IS NULL OR CHAR_LENGTH(TRIM(table_no)) > 0))
+    OR (order_type = 'TAKEAWAY' AND table_no IS NULL)
+  ),
+
   CONSTRAINT chk_orders_amounts CHECK (
     subtotal >= 0
     AND discount_value >= 0
     AND discount_amount >= 0
     AND discount_amount <= subtotal
-    AND (discount_type <> 'PERCENT' OR discount_value <= 100)
+    AND (
+      (
+        discount_type = 'NONE'
+        AND discount_value = 0
+        AND discount_amount = 0
+      )
+      OR
+      (
+        discount_type = 'FIXED'
+        AND discount_amount = discount_value
+      )
+      OR
+      (
+        discount_type = 'PERCENT'
+        AND discount_value <= 100
+        AND discount_amount = ROUND((subtotal * discount_value) / 100, 2)
+      )
+    )
   ),
 
   CONSTRAINT chk_orders_discount_approval CHECK (
@@ -295,27 +315,38 @@ CREATE TABLE IF NOT EXISTS orders (
       discount_type = 'NONE'
       AND discount_value = 0
       AND discount_amount = 0
+      AND discount_approved_by IS NULL
+      AND discount_reason IS NULL
     )
     OR
     (
       discount_type IN ('PERCENT', 'FIXED')
-      AND discount_amount > 0
+      AND discount_value > 0
       AND discount_approved_by IS NOT NULL
       AND discount_reason IS NOT NULL
+      AND CHAR_LENGTH(TRIM(discount_reason)) > 0
     )
   ),
 
   CONSTRAINT chk_orders_paid_time CHECK (
-    status NOT IN ('PAID', 'REFUNDED')
-    OR paid_at IS NOT NULL
+    (status IN ('PAID', 'REFUNDED') AND paid_at IS NOT NULL AND subtotal > 0)
+    OR (status NOT IN ('PAID', 'REFUNDED') AND paid_at IS NULL)
   ),
 
   CONSTRAINT chk_orders_cancellation CHECK (
-    status <> 'CANCELLED'
-    OR (
-      cancelled_at IS NOT NULL
+    (
+      status = 'CANCELLED'
+      AND cancelled_at IS NOT NULL
       AND cancelled_by IS NOT NULL
       AND cancellation_reason IS NOT NULL
+      AND CHAR_LENGTH(TRIM(cancellation_reason)) > 0
+    )
+    OR
+    (
+      status <> 'CANCELLED'
+      AND cancelled_at IS NULL
+      AND cancelled_by IS NULL
+      AND cancellation_reason IS NULL
     )
   )
 ) ENGINE=InnoDB;
@@ -323,8 +354,6 @@ CREATE TABLE IF NOT EXISTS orders (
 
 -- ==========================================================
 -- 10. ORDER ITEMS
--- Keep snapshot names/prices even when the menu changes.
--- line_total excludes add-ons.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -363,9 +392,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 
 -- ==========================================================
--- 11. ORDER ITEM ADD-ONS (Updated: ON DELETE CASCADE)
--- quantity = TOTAL add-ons on this order item.
--- Example: 2 drinks x 1 extra shot = quantity 2.
+-- 11. ORDER ITEM ADD-ONS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS order_item_addons (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -394,9 +421,9 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
 
 
 -- ==========================================================
--- 12. PAYMENTS (Updated: explicit amount_usd, change_usd, change_khr)
--- amount = money applied to the bill in payment currency, excluding change.
--- change_usd and change_khr track physical cash given back from drawer.
+-- 12. PAYMENTS (Fixed: DB-02, DB-03, DB-09, NEW-03)
+-- Added khr_per_usd snapshot so USD payments giving KHR change
+-- preserve the exact historical KHR/USD exchange rate.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS payments (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -405,8 +432,9 @@ CREATE TABLE IF NOT EXISTS payments (
   received_by BIGINT UNSIGNED NOT NULL,
   method ENUM('CASH', 'KHQR') NOT NULL,
   currency ENUM('USD', 'KHR') NOT NULL,
-  amount DECIMAL(14,2) NOT NULL COMMENT 'Bill amount in payment currency',
-  exchange_rate DECIMAL(14,6) NOT NULL,
+  amount DECIMAL(14,2) NOT NULL COMMENT 'Bill amount in payment currency, excluding change',
+  exchange_rate DECIMAL(14,6) NOT NULL COMMENT '1 for USD; KHR per USD for KHR',
+  khr_per_usd DECIMAL(14,6) NOT NULL COMMENT 'Historical shop KHR/USD rate snapshot at payment time',
   amount_usd DECIMAL(14,2) NOT NULL COMMENT 'Equivalent USD applied to order total',
 
   received_amount DECIMAL(14,2) NULL COMMENT 'Cash handed by customer in payment currency',
@@ -447,7 +475,21 @@ CREATE TABLE IF NOT EXISTS payments (
 
   CONSTRAINT chk_payments_rate CHECK (
     exchange_rate > 0
-    AND (currency <> 'USD' OR exchange_rate = 1)
+    AND khr_per_usd > 0
+    AND (
+      (currency = 'USD' AND exchange_rate = 1)
+      OR (currency = 'KHR' AND exchange_rate = khr_per_usd)
+    )
+  ),
+
+  CONSTRAINT chk_payments_math CHECK (
+    (
+      currency = 'USD' AND amount_usd = amount
+    )
+    OR
+    (
+      currency = 'KHR' AND ABS(amount_usd - ROUND(amount / exchange_rate, 2)) <= 0.05
+    )
   ),
 
   CONSTRAINT chk_payments_cash CHECK (
@@ -455,6 +497,19 @@ CREATE TABLE IF NOT EXISTS payments (
       method = 'CASH'
       AND received_amount IS NOT NULL
       AND received_amount >= amount
+      AND (
+        -- Same-currency USD change: exact match required
+        (currency = 'USD' AND change_khr = 0 AND received_amount - amount = change_usd)
+        -- Same-currency KHR change: exact match required
+        OR (currency = 'KHR' AND change_usd = 0 AND received_amount - amount = change_khr)
+        -- Cross-currency change: allow <= $0.05 tolerance for 100-KHR banknote rounding
+        OR (
+          ABS(
+            ((received_amount - amount) / exchange_rate)
+            - (change_usd + (change_khr / khr_per_usd))
+          ) <= 0.05
+        )
+      )
     )
     OR
     (
@@ -466,15 +521,25 @@ CREATE TABLE IF NOT EXISTS payments (
   ),
 
   CONSTRAINT chk_payments_completed CHECK (
-    status <> 'COMPLETED' OR paid_at IS NOT NULL
+    (
+      status = 'COMPLETED'
+      AND paid_at IS NOT NULL
+      AND (
+        method <> 'KHQR'
+        OR (reference IS NOT NULL AND CHAR_LENGTH(TRIM(reference)) > 0)
+      )
+    )
+    OR
+    (
+      status <> 'COMPLETED'
+      AND paid_at IS NULL
+    )
   )
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
--- 13. REFUNDS (Updated: explicit amount_usd to match payments)
--- Full refunds only: one refund per original payment.
--- Copy amount, exchange_rate, and amount_usd directly from payments.
+-- 13. REFUNDS (Fixed: DB-03, DB-08, NEW-03)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS refunds (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -486,6 +551,7 @@ CREATE TABLE IF NOT EXISTS refunds (
   currency ENUM('USD', 'KHR') NOT NULL,
   amount DECIMAL(14,2) NOT NULL,
   exchange_rate DECIMAL(14,6) NOT NULL,
+  khr_per_usd DECIMAL(14,6) NOT NULL COMMENT 'Copied from original payment khr_per_usd',
   amount_usd DECIMAL(14,2) NOT NULL COMMENT 'Copied from original payment amount_usd',
 
   reason VARCHAR(500) NOT NULL,
@@ -513,30 +579,38 @@ CREATE TABLE IF NOT EXISTS refunds (
     FOREIGN KEY (approved_by) REFERENCES users(id),
 
   CONSTRAINT chk_refunds_amount CHECK (
-    amount > 0 AND amount_usd > 0
+    amount > 0
+    AND amount_usd > 0
+    AND CHAR_LENGTH(TRIM(reason)) > 0
   ),
 
   CONSTRAINT chk_refunds_rate CHECK (
     exchange_rate > 0
-    AND (currency <> 'USD' OR exchange_rate = 1)
+    AND khr_per_usd > 0
+    AND (
+      (currency = 'USD' AND exchange_rate = 1)
+      OR (currency = 'KHR' AND exchange_rate = khr_per_usd)
+    )
   ),
 
   CONSTRAINT chk_refunds_completed CHECK (
-    status <> 'COMPLETED' OR refunded_at IS NOT NULL
+    (status = 'COMPLETED' AND refunded_at IS NOT NULL)
+    OR (status <> 'COMPLETED' AND refunded_at IS NULL)
   )
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
--- 14. STOCK MOVEMENTS
--- Positive quantity_change = stock IN.
--- Negative quantity_change = stock OUT.
--- Keep ingredients.current_stock in sync via DB transaction.
+-- 14. STOCK MOVEMENTS (Fixed: DB-06, NEW-05)
+-- Added source_movement_id with UNIQUE key so each SALE movement
+-- can be reversed by a RETURN movement at most once.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS stock_movements (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ingredient_id BIGINT UNSIGNED NOT NULL,
   order_id BIGINT UNSIGNED NULL,
+  source_movement_id BIGINT UNSIGNED NULL
+    COMMENT 'References original SALE movement id when movement_type = RETURN',
   movement_type ENUM(
     'PURCHASE', 'SALE', 'WASTE', 'ADJUSTMENT', 'RETURN'
   ) NOT NULL,
@@ -549,6 +623,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   UNIQUE KEY uq_stock_request (idempotency_key),
+  UNIQUE KEY uq_stock_return_source (source_movement_id),
   KEY idx_stock_ingredient_date (ingredient_id, created_at),
   KEY idx_stock_order (order_id),
 
@@ -557,6 +632,9 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 
   CONSTRAINT fk_stock_order
     FOREIGN KEY (order_id) REFERENCES orders(id),
+
+  CONSTRAINT fk_stock_source_movement
+    FOREIGN KEY (source_movement_id) REFERENCES stock_movements(id),
 
   CONSTRAINT fk_stock_creator
     FOREIGN KEY (created_by) REFERENCES users(id),
@@ -582,15 +660,39 @@ CREATE TABLE IF NOT EXISTS stock_movements (
     CHECK (unit_cost IS NULL OR unit_cost >= 0),
 
   CONSTRAINT chk_stock_sale_reference CHECK (
-    movement_type <> 'SALE'
-    OR (order_id IS NOT NULL AND idempotency_key IS NOT NULL)
+    (
+      movement_type = 'SALE'
+      AND order_id IS NOT NULL
+      AND idempotency_key IS NOT NULL
+      AND source_movement_id IS NULL
+    )
+    OR
+    (
+      movement_type = 'RETURN'
+      AND order_id IS NOT NULL
+      AND idempotency_key IS NOT NULL
+      AND source_movement_id IS NOT NULL
+    )
+    OR
+    (
+      movement_type = 'PURCHASE'
+      AND order_id IS NULL
+      AND source_movement_id IS NULL
+    )
+    OR
+    (
+      movement_type IN ('WASTE', 'ADJUSTMENT')
+      AND order_id IS NULL
+      AND source_movement_id IS NULL
+      AND reason IS NOT NULL
+      AND CHAR_LENGTH(TRIM(reason)) > 0
+    )
   )
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
--- 15. EXPENSES
--- Cash expenses must belong to a shift.
+-- 15. EXPENSES (Fixed: NEW-04 void audit columns & check)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -607,6 +709,9 @@ CREATE TABLE IF NOT EXISTS expenses (
   ) STORED,
 
   status ENUM('ACTIVE', 'VOIDED') NOT NULL DEFAULT 'ACTIVE',
+  voided_at DATETIME NULL,
+  voided_by BIGINT UNSIGNED NULL,
+  void_reason VARCHAR(255) NULL,
   created_by BIGINT UNSIGNED NOT NULL,
   incurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -622,7 +727,14 @@ CREATE TABLE IF NOT EXISTS expenses (
   CONSTRAINT fk_expenses_creator
     FOREIGN KEY (created_by) REFERENCES users(id),
 
-  CONSTRAINT chk_expenses_amount CHECK (amount > 0),
+  CONSTRAINT fk_expenses_voided_by
+    FOREIGN KEY (voided_by) REFERENCES users(id),
+
+  CONSTRAINT chk_expenses_amount CHECK (
+    amount > 0
+    AND CHAR_LENGTH(TRIM(category)) > 0
+    AND CHAR_LENGTH(TRIM(description)) > 0
+  ),
 
   CONSTRAINT chk_expenses_rate CHECK (
     exchange_rate > 0
@@ -631,13 +743,29 @@ CREATE TABLE IF NOT EXISTS expenses (
 
   CONSTRAINT chk_expenses_cash_shift CHECK (
     payment_method <> 'CASH' OR shift_id IS NOT NULL
+  ),
+
+  CONSTRAINT chk_expenses_void CHECK (
+    (
+      status = 'ACTIVE'
+      AND voided_at IS NULL
+      AND voided_by IS NULL
+      AND void_reason IS NULL
+    )
+    OR
+    (
+      status = 'VOIDED'
+      AND voided_at IS NOT NULL
+      AND voided_by IS NOT NULL
+      AND void_reason IS NOT NULL
+      AND CHAR_LENGTH(TRIM(void_reason)) > 0
+    )
   )
 ) ENGINE=InnoDB;
 
 
 -- ==========================================================
 -- 16. AUDIT LOGS
--- Write logs from the backend for important actions.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -658,18 +786,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 
 -- ==========================================================
--- INITIAL SETTINGS
--- Rerunning will not overwrite existing settings.
--- ==========================================================
-INSERT INTO settings (id, shop_name, exchange_rate)
-SELECT 1, 'Coffee Shop', 4100.000000
-WHERE NOT EXISTS (
-  SELECT 1 FROM settings WHERE id = 1
-);
-
--- ==========================================================
 -- 17. REFRESH TOKENS (USER SESSIONS)
--- Store SHA-256 hash of refresh tokens for multi-device auth.
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -686,8 +803,20 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
   CONSTRAINT fk_refresh_tokens_user
     FOREIGN KEY (user_id) REFERENCES users(id)
-    ON DELETE CASCADE
+    ON DELETE CASCADE,
+
+  CONSTRAINT chk_refresh_tokens_expiry
+    CHECK (expires_at > created_at)
 ) ENGINE=InnoDB;
 
--- CHECK CREATED TABLES
+
+-- ==========================================================
+-- INITIAL SETTINGS
+-- ==========================================================
+INSERT INTO settings (id, shop_name, exchange_rate)
+SELECT 1, 'Coffee Shop', 4100.000000
+WHERE NOT EXISTS (
+  SELECT 1 FROM settings WHERE id = 1
+);
+
 SHOW TABLES;
