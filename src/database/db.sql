@@ -29,6 +29,19 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT chk_users_email CHECK (CHAR_LENGTH(TRIM(email)) > 0)
 ) ENGINE=InnoDB;
 
+CREATE TABLE password_resets (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    email VARCHAR(150) NOT NULL,
+    otp_hash VARCHAR(255) NOT NULL,        
+    reset_token VARCHAR(255) NULL,         
+    attempts INT DEFAULT 0,                
+    expires_at DATETIME NOT NULL,           
+    is_used BOOLEAN DEFAULT FALSE,          
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_password_resets_user 
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
 -- ==========================================================
 -- 2. SETTINGS
