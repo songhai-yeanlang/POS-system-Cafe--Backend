@@ -29,22 +29,34 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT chk_users_email CHECK (CHAR_LENGTH(TRIM(email)) > 0)
 ) ENGINE=InnoDB;
 
-CREATE TABLE password_resets (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT UNSIGNED NOT NULL,
-    email VARCHAR(150) NOT NULL,
-    otp_hash VARCHAR(255) NOT NULL,        
-    reset_token VARCHAR(255) NULL,         
-    attempts INT DEFAULT 0,                
-    expires_at DATETIME NOT NULL,           
-    is_used BOOLEAN DEFAULT FALSE,          
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_password_resets_user 
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+-- ==========================================================
+-- 2. PASSWORD RESETS (OTP & RESET TOKEN)
+-- ==========================================================
+CREATE TABLE IF NOT EXISTS password_resets (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  otp_hash VARCHAR(255) NOT NULL,
+  reset_token VARCHAR(255) NULL,
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  expires_at DATETIME NOT NULL,
+  is_used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_password_resets_token (reset_token),
+  KEY idx_password_resets_lookup (email, is_used, expires_at),
+  KEY idx_password_resets_user (user_id, is_used),
+
+  CONSTRAINT fk_password_resets_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE,
+
+  CONSTRAINT chk_password_resets_expiry
+    CHECK (expires_at > created_at)
+) ENGINE=InnoDB;
 
 -- ==========================================================
--- 2. SETTINGS
+--3. SETTINGS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS settings (
   id TINYINT UNSIGNED PRIMARY KEY,
@@ -67,7 +79,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 -- ==========================================================
--- 3. CATEGORIES
+-- 4. CATEGORIES
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS categories (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -84,7 +96,7 @@ CREATE TABLE IF NOT EXISTS categories (
 
 
 -- ==========================================================
--- 4. PRODUCTS
+-- 5. PRODUCTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS products (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -108,7 +120,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 
 -- ==========================================================
--- 5. PRODUCT VARIANTS
+-- 6. PRODUCT VARIANTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS product_variants (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -135,7 +147,7 @@ CREATE TABLE IF NOT EXISTS product_variants (
 
 
 -- ==========================================================
--- 6. INGREDIENTS
+-- 7. INGREDIENTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS ingredients (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -157,7 +169,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
 
 
 -- ==========================================================
--- 7. RECIPES
+-- 8. RECIPES
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS recipes (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -183,7 +195,7 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 
 -- ==========================================================
--- 8. SHIFTS
+-- 9. SHIFTS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS shifts (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -242,7 +254,7 @@ CREATE TABLE IF NOT EXISTS shifts (
 
 
 -- ==========================================================
--- 9. ORDERS (Fixed: DB-01, DB-08, NEW-01, NEW-02)
+-- 10. ORDERS (Fixed: DB-01, DB-08, NEW-01, NEW-02)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS orders (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -366,7 +378,7 @@ CREATE TABLE IF NOT EXISTS orders (
 
 
 -- ==========================================================
--- 10. ORDER ITEMS
+-- 11. ORDER ITEMS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -405,7 +417,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 
 -- ==========================================================
--- 11. ORDER ITEM ADD-ONS
+-- 12. ORDER ITEM ADD-ONS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS order_item_addons (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -434,7 +446,7 @@ CREATE TABLE IF NOT EXISTS order_item_addons (
 
 
 -- ==========================================================
--- 12. PAYMENTS (Fixed: DB-02, DB-03, DB-09, NEW-03)
+-- 13. PAYMENTS (Fixed: DB-02, DB-03, DB-09, NEW-03)
 -- Added khr_per_usd snapshot so USD payments giving KHR change
 -- preserve the exact historical KHR/USD exchange rate.
 -- ==========================================================
@@ -552,7 +564,7 @@ CREATE TABLE IF NOT EXISTS payments (
 
 
 -- ==========================================================
--- 13. REFUNDS (Fixed: DB-03, DB-08, NEW-03)
+-- 14. REFUNDS (Fixed: DB-03, DB-08, NEW-03)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS refunds (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -614,7 +626,7 @@ CREATE TABLE IF NOT EXISTS refunds (
 
 
 -- ==========================================================
--- 14. STOCK MOVEMENTS (Fixed: DB-06, NEW-05)
+-- 15. STOCK MOVEMENTS (Fixed: DB-06, NEW-05)
 -- Added source_movement_id with UNIQUE key so each SALE movement
 -- can be reversed by a RETURN movement at most once.
 -- ==========================================================
@@ -705,7 +717,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 
 
 -- ==========================================================
--- 15. EXPENSES (Fixed: NEW-04 void audit columns & check)
+-- 16. EXPENSES (Fixed: NEW-04 void audit columns & check)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS expenses (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -778,7 +790,7 @@ CREATE TABLE IF NOT EXISTS expenses (
 
 
 -- ==========================================================
--- 16. AUDIT LOGS
+-- 17. AUDIT LOGS
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -799,7 +811,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 
 -- ==========================================================
--- 17. REFRESH TOKENS (USER SESSIONS)
+-- 18. REFRESH TOKENS (USER SESSIONS)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

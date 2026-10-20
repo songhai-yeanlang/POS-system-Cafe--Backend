@@ -30,7 +30,19 @@ const errorHandler = (err, req, res, next) => {
         message = 'Authentication token has expired';
     }
 
-    // 4. Handle MySQL Errors
+    // 4. Handle Multer File Upload Errors
+    else if (err.name === 'MulterError') {
+        statusCode = 400;
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            message = 'File size is too large. Maximum allowed size is 2MB';
+        } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+            message = `Unexpected upload field: '${err.field}'. Expected field name is 'logo'`;
+        } else {
+            message = err.message;
+        }
+    }
+
+    // 5. Handle MySQL Errors
     else if (err.code === 'ER_DUP_ENTRY') {
         statusCode = 409;
         message = 'Duplicate entry: Record already exists';
