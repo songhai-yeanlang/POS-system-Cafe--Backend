@@ -11,17 +11,20 @@ const notFound = require('./middlewares/not-found');
 const authRoutes = require('./modules/auth/auth.route');
 const auditLogsRoutes = require('./modules/audit-logs/audit-logs.route');
 const userRoutes = require('./modules/users/user.route');
+const settingsRoutes = require('./modules/settings/setting.route');
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 
 // Register Endpoints
 app.use('/api/auth', authRoutes);
 app.use('/api', auditLogsRoutes);
 app.use('/api', userRoutes);
+app.use('/api', settingsRoutes);
 
 
 // 404 Handler
