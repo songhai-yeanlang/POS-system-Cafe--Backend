@@ -1,12 +1,14 @@
 node_modules/
 .env
+
+# Ignore everything inside uploads
 uploads/*
+!uploads/*/
 !uploads/.gitkeep
-uploads/logo/*
-!uploads/logo/.gitkeep
-uploads/foods/*
-!uploads/foods/.gitkeep
-uploads/addon/*
-!uploads/addon/.gitkeep
+
+uploads/**/*
+!uploads/**/
+!uploads/**/.gitkeep
+
 scripts/*
 !scripts/.gitkeep
