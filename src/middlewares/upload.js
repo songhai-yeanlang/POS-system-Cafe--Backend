@@ -39,8 +39,11 @@ const createUploader = ({ folder = 'logo', allowedTypes = /jpeg|jpg|png|webp|svg
 };
 
 const uploadLogo = createUploader({ folder: 'logo', maxFileSizeMb: 2 }).single('logo');
+const uploadProductImage = createUploader({ folder: 'products', maxFileSizeMb: 5 }).single('image');
 
 module.exports = {
     createUploader,
-    uploadLogo
+    uploadLogo,
+    uploadProductImage
 };
+

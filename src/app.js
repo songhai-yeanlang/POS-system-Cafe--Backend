@@ -12,6 +12,7 @@ const authRoutes = require('./modules/auth/auth.route');
 const auditLogsRoutes = require('./modules/audit-logs/audit-logs.route');
 const userRoutes = require('./modules/users/user.route');
 const settingsRoutes = require('./modules/settings/setting.route');
+const productRoutes = require('./modules/products/product.route');
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api', auditLogsRoutes);
 app.use('/api', userRoutes);
 app.use('/api', settingsRoutes);
+app.use('/api', productRoutes)
 
 
 // 404 Handler
