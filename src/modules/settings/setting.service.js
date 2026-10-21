@@ -4,30 +4,34 @@ const settingModel = require('./setting.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
 
-const getSettings = async () => {
-    let settings = await settingModel.getSettings();
+const ensureSettingsExist = async () => {
+    let settings = await settingModel.findSettings();
     if (!settings) {
-        settings = await settingModel.initDefaultSettings();
+        await settingModel.insertDefaultSettings();
+        settings = await settingModel.findSettings();
     }
+    return settings;
+};
 
+const getSettings = async () => {
+    const settings = await ensureSettingsExist();
     if (!settings) {
         throw ApiError.notFound('Shop settings not found');
     }
-
     return settings;
 };
 
 const updateSettings = async ({ updateData, updaterId, ipAddress }) => {
     // 1. Ensure current settings exist
-    let currentSettings = await settingModel.getSettings();
-    if (!currentSettings) {
-        currentSettings = await settingModel.initDefaultSettings();
-    }
+    await ensureSettingsExist();
 
-    // 2. Perform update
-    const updatedSettings = await settingModel.updateSettings(updateData);
+    // 2. Perform update via model
+    await settingModel.updateSettingsById(1, updateData);
 
-    // 3. Record audit log
+    // 3. Fetch fresh settings
+    const updatedSettings = await settingModel.findSettings();
+
+    // 4. Record audit log
     try {
         await auditLogsModel.insertAuditLog({
             userId: updaterId || null,
@@ -46,10 +50,7 @@ const updateSettings = async ({ updateData, updaterId, ipAddress }) => {
 
 const updateLogo = async ({ logoFilename, updaterId, ipAddress }) => {
     // 1. Ensure current settings exist
-    let currentSettings = await settingModel.getSettings();
-    if (!currentSettings) {
-        currentSettings = await settingModel.initDefaultSettings();
-    }
+    const currentSettings = await ensureSettingsExist();
 
     const relativeLogoPath = `/uploads/logo/${logoFilename}`;
 
@@ -67,7 +68,8 @@ const updateLogo = async ({ logoFilename, updaterId, ipAddress }) => {
     }
 
     // 3. Update database
-    const updatedSettings = await settingModel.updateSettings({ logo: relativeLogoPath });
+    await settingModel.updateSettingsById(1, { logo: relativeLogoPath });
+    const updatedSettings = await settingModel.findSettings();
 
     // 4. Record audit log
     try {
@@ -88,10 +90,7 @@ const updateLogo = async ({ logoFilename, updaterId, ipAddress }) => {
 
 const deleteLogo = async ({ removerId, ipAddress }) => {
     // 1. Ensure current settings exist
-    let currentSettings = await settingModel.getSettings();
-    if (!currentSettings) {
-        currentSettings = await settingModel.initDefaultSettings();
-    }
+    const currentSettings = await ensureSettingsExist();
 
     if (!currentSettings.logo) {
         throw ApiError.badRequest('No shop logo exists to delete');
@@ -113,7 +112,8 @@ const deleteLogo = async ({ removerId, ipAddress }) => {
     }
 
     // 3. Update database to set logo = null
-    const updatedSettings = await settingModel.updateSettings({ logo: null });
+    await settingModel.updateSettingsById(1, { logo: null });
+    const updatedSettings = await settingModel.findSettings();
 
     // 4. Record audit log
     try {
@@ -138,4 +138,3 @@ module.exports = {
     updateLogo,
     deleteLogo
 };
-

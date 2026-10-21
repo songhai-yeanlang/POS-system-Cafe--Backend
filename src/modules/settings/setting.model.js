@@ -1,7 +1,11 @@
 const { connection: pool } = require('../../config/db.config');
 
-const getSettings = async () => {
-    const [rows] = await pool.query(
+/**
+ * Pure SQL: Fetch settings singleton row (id = 1)
+ */
+const findSettings = async (connection = null) => {
+    const db = connection || pool;
+    const [rows] = await db.query(
         `SELECT 
             id, 
             shop_name, 
@@ -20,15 +24,22 @@ const getSettings = async () => {
     return rows[0] || null;
 };
 
-const initDefaultSettings = async () => {
-    await pool.query(
+/**
+ * Pure SQL: Insert default settings if id = 1 does not exist
+ */
+const insertDefaultSettings = async (connection = null) => {
+    const db = connection || pool;
+    const [result] = await db.query(
         `INSERT IGNORE INTO settings (id, shop_name, exchange_rate) 
          VALUES (1, 'Coffee Shop', 4100.000000)`
     );
-    return await getSettings();
+    return result.affectedRows;
 };
 
-const updateSettings = async (data = {}) => {
+/**
+ * Pure SQL: Update settings fields by id
+ */
+const updateSettingsById = async (id = 1, data = {}, connection = null) => {
     const allowedFields = [
         'shop_name',
         'address',
@@ -50,18 +61,19 @@ const updateSettings = async (data = {}) => {
     }
 
     if (fields.length === 0) {
-        return await getSettings();
+        return 0;
     }
 
-    params.push(1); // WHERE id = 1
+    params.push(id);
+    const db = connection || pool;
     const sql = `UPDATE settings SET ${fields.join(', ')} WHERE id = ?`;
-    await pool.query(sql, params);
+    const [result] = await db.query(sql, params);
 
-    return await getSettings();
+    return result.affectedRows;
 };
 
 module.exports = {
-    getSettings,
-    initDefaultSettings,
-    updateSettings
+    findSettings,
+    insertDefaultSettings,
+    updateSettingsById
 };
