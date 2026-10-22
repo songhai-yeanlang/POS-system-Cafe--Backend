@@ -34,9 +34,9 @@ const errorHandler = (err, req, res, next) => {
     else if (err.name === 'MulterError') {
         statusCode = 400;
         if (err.code === 'LIMIT_FILE_SIZE') {
-            message = 'File size is too large. Maximum allowed size is 2MB';
+            message = 'File size is too large for upload';
         } else if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-            message = `Unexpected upload field: '${err.field}'. Expected field name is 'logo'`;
+            message = `Unexpected upload field: '${err.field}'`;
         } else {
             message = err.message;
         }

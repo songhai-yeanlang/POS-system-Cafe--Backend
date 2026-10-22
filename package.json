@@ -1,4 +1,13 @@
 {
+  "name": "pos-coffee-backend",
+  "version": "1.0.0",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "generate:postman": "node scripts/generate_postman.js",
+    "test:recovery": "node scripts/test_recovery.js"
+  },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
@@ -11,6 +20,8 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "mysql2": "^3.24.6",
-    "nodemailer": "^10.1.7"
+    "nodemailer": "^10.1.7",
+    "sharp": "^0.35.5",
+    "websocket": "^1.0.35"
   }
 }

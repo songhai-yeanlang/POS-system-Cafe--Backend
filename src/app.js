@@ -13,6 +13,7 @@ const auditLogsRoutes = require('./modules/audit-logs/audit-logs.route');
 const userRoutes = require('./modules/users/user.route');
 const settingsRoutes = require('./modules/settings/setting.route');
 const productRoutes = require('./modules/products/product.route');
+const inventoryRoutes = require('./modules/inventory/inventory.route');
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use('/api', auditLogsRoutes);
 app.use('/api', userRoutes);
 app.use('/api', settingsRoutes);
 app.use('/api', productRoutes)
+app.use('/api/inventory', inventoryRoutes)
 
 
 // 404 Handler
