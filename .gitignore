@@ -12,3 +12,7 @@ uploads/**/*
 
 scripts/*
 !scripts/.gitkeep
+
+# Postman collections
+pos_coffee_api.postman_collection.json
+*.postman_collection.json
