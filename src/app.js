@@ -15,7 +15,7 @@ const settingsRoutes = require('./modules/settings/setting.route');
 const productRoutes = require('./modules/products/product.route');
 const inventoryRoutes = require('./modules/inventory/inventory.route');
 const shiftRoutes = require('./modules/shifts/shift.route');
-
+const orderRoutes = require('./modules/orders/order.route');
 
 const app = express();
 
@@ -32,6 +32,8 @@ app.use('/api', settingsRoutes);
 app.use('/api', productRoutes)
 app.use('/api/inventory', inventoryRoutes)
 app.use('/api', shiftRoutes)
+app.use('/api', orderRoutes)
+
 
 
 // 404 Handler
