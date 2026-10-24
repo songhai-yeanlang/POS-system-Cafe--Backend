@@ -93,21 +93,17 @@ const updateOrderSchema = {
         })
     }),
     body: Joi.object({
-        order_type: Joi.string().valid('DINE_IN', 'TAKEAWAY').default('TAKEAWAY').messages({
+        order_type: Joi.string().valid('DINE_IN', 'TAKEAWAY').optional().messages({
             'any.only': 'Order type must be either DINE_IN or TAKEAWAY'
         }),
-        table_no: Joi.string().trim().max(20).allow(null, '').when('order_type', {
-            is: 'TAKEAWAY',
-            then: Joi.forbidden().messages({
-                'any.unknown': 'Table number is not allowed for takeaway orders'
-            }),
-            otherwise: Joi.optional()
+        table_no: Joi.string().trim().max(20).allow(null, '').optional().messages({
+            'string.max': 'Table number cannot exceed 20 characters'
         }),
         note: Joi.string().trim().max(500).allow(null, '').optional().messages({
             'string.max': 'Note cannot exceed 500 characters'
         }),
-        discount_type: Joi.string().valid('NONE', 'PERCENT', 'FIXED').default('NONE'),
-        discount_value: Joi.number().min(0).default(0).messages({
+        discount_type: Joi.string().valid('NONE', 'PERCENT', 'FIXED').optional(),
+        discount_value: Joi.number().min(0).optional().messages({
             'number.min': 'Discount value cannot be negative'
         }),
         discount_approved_by: Joi.number().integer().positive().allow(null).optional(),
@@ -142,10 +138,11 @@ const updateOrderSchema = {
                     })
                 ).optional().default([])
             })
-        ).min(1).required().messages({
-            'any.required': 'Order must contain at least one item',
-            'array.min': 'Order must contain at least one item'
+        ).min(1).optional().messages({
+            'array.min': 'Order items array cannot be empty when provided'
         })
+    }).min(1).messages({
+        'object.min': 'At least one field must be provided to update order'
     })
 };
 

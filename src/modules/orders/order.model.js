@@ -484,8 +484,8 @@ const findAllOrders = async ({
     }
 
     if (search) {
-        sql += ` AND (o.receipt_no LIKE ? OR o.table_no LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`);
+        sql += ` AND (o.receipt_no LIKE ? OR o.table_no LIKE ? OR u.name LIKE ? OR CAST(o.queue_no AS CHAR) = ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, search);
     }
 
     sql += ` ORDER BY o.id DESC`;
@@ -508,7 +508,7 @@ const countAllOrders = async ({
     endDate,
     search
 } = {}, connection = pool) => {
-    let sql = `SELECT COUNT(*) AS total FROM orders o WHERE 1=1`;
+    let sql = `SELECT COUNT(*) AS total FROM orders o JOIN users u ON u.id = o.cashier_id WHERE 1=1`;
     const params = [];
 
     if (status) {
@@ -542,8 +542,8 @@ const countAllOrders = async ({
     }
 
     if (search) {
-        sql += ` AND (o.receipt_no LIKE ? OR o.table_no LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`);
+        sql += ` AND (o.receipt_no LIKE ? OR o.table_no LIKE ? OR u.name LIKE ? OR CAST(o.queue_no AS CHAR) = ?)`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, search);
     }
 
     const [rows] = await connection.query(sql, params);

@@ -29,13 +29,17 @@ const findAllIngredients = async ({ isActive, search, unit, lowStock, limit, off
         params.push(unit);
     }
 
-    if (search) {
+    if (search && search.trim()) {
         sql += ` AND i.name LIKE ?`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
     }
 
-    if (lowStock) {
-        sql += ` AND i.current_stock <= i.minimum_stock`;
+    if (lowStock !== undefined && lowStock !== null) {
+        if (lowStock === true || lowStock === 'true' || lowStock === 1) {
+            sql += ` AND i.current_stock <= i.minimum_stock`;
+        } else {
+            sql += ` AND i.current_stock > i.minimum_stock`;
+        }
     }
 
     sql += ` GROUP BY i.id ORDER BY i.name ASC`;
@@ -63,13 +67,17 @@ const countIngredients = async ({ isActive, search, unit, lowStock } = {}) => {
         params.push(unit);
     }
 
-    if (search) {
+    if (search && search.trim()) {
         sql += ` AND i.name LIKE ?`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
     }
 
-    if (lowStock) {
-        sql += ` AND i.current_stock <= i.minimum_stock`;
+    if (lowStock !== undefined && lowStock !== null) {
+        if (lowStock === true || lowStock === 'true' || lowStock === 1) {
+            sql += ` AND i.current_stock <= i.minimum_stock`;
+        } else {
+            sql += ` AND i.current_stock > i.minimum_stock`;
+        }
     }
 
     const [rows] = await pool.query(sql, params);
@@ -101,9 +109,9 @@ const findLowStockIngredients = async ({ search, unit, limit, offset } = {}) => 
         params.push(unit);
     }
 
-    if (search) {
+    if (search && search.trim()) {
         sql += ` AND i.name LIKE ?`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
     }
 
     sql += ` GROUP BY i.id ORDER BY (i.current_stock <= 0) DESC, deficit_stock DESC, i.name ASC`;
@@ -130,9 +138,9 @@ const countLowStockIngredients = async ({ search, unit } = {}) => {
         params.push(unit);
     }
 
-    if (search) {
+    if (search && search.trim()) {
         sql += ` AND i.name LIKE ?`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
     }
 
     const [rows] = await pool.query(sql, params);
@@ -164,9 +172,9 @@ const findIngredientById = async (id, connection = pool) => {
 
 const findIngredientByName = async (name, connection = pool) => {
     const [rows] = await connection.query(
-        `SELECT id, name, unit, current_stock, minimum_stock, is_active, created_at, updated_at
+        `SELECT id, name, unit, CAST(current_stock AS DOUBLE) AS current_stock, CAST(minimum_stock AS DOUBLE) AS minimum_stock, is_active, created_at, updated_at
         FROM ingredients
-        WHERE name = ?
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
         LIMIT 1`,
         [name]
     );
@@ -175,9 +183,9 @@ const findIngredientByName = async (name, connection = pool) => {
 
 const findIngredientByNameExcludeId = async (name, excludeId, connection = pool) => {
     const [rows] = await connection.query(
-        `SELECT id, name, unit, current_stock, minimum_stock, is_active, created_at, updated_at
+        `SELECT id, name, unit, CAST(current_stock AS DOUBLE) AS current_stock, CAST(minimum_stock AS DOUBLE) AS minimum_stock, is_active, created_at, updated_at
         FROM ingredients
-        WHERE name = ? AND id != ?
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?
         LIMIT 1`,
         [name, excludeId]
     );

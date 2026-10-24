@@ -16,7 +16,9 @@ const productRoutes = require('./modules/products/product.route');
 const inventoryRoutes = require('./modules/inventory/inventory.route');
 const shiftRoutes = require('./modules/shifts/shift.route');
 const orderRoutes = require('./modules/orders/order.route');
-
+const paymentRoutes = require('./modules/payments/payment.route');
+const expenseRoutes = require('./modules/expenses/expense.route');
+const reportRoutes = require('./modules/reports/report.route');
 const app = express();
 
 app.use(cors());
@@ -30,10 +32,12 @@ app.use('/api', auditLogsRoutes);
 app.use('/api', userRoutes);
 app.use('/api', settingsRoutes);
 app.use('/api', productRoutes)
-app.use('/api/inventory', inventoryRoutes)
-app.use('/api', shiftRoutes)
-app.use('/api', orderRoutes)
-
+app.use('/api/inventory', inventoryRoutes);
+app.use('/api', shiftRoutes);
+app.use('/api', orderRoutes);
+app.use('/api', paymentRoutes);
+app.use('/api', expenseRoutes);
+app.use('/api', reportRoutes);
 
 
 // 404 Handler

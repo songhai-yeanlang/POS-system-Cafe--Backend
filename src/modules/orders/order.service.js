@@ -100,7 +100,7 @@ const prepareOrderItemsAndSubtotal = async (items = []) => {
 /**
  * Helper to calculate and validate discounts
  */
-const calculateAndValidateDiscount = async (orderData, subtotal) => {
+const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = null) => {
     let discountType = orderData.discount_type || 'NONE';
     let discountValue = Number(orderData.discount_value) || 0;
     let discountAmount = 0;
@@ -108,14 +108,20 @@ const calculateAndValidateDiscount = async (orderData, subtotal) => {
     let discountReason = null;
 
     if (discountType !== 'NONE' && discountValue > 0) {
-        if (!orderData.discount_approved_by) {
-            throw ApiError.badRequest('Discounts must be approved by an authorized manager/owner. Please provide discount_approved_by');
+        // If current user is OWNER, they can auto-approve the discount if not explicitly specified
+        let approverId = orderData.discount_approved_by;
+        if (!approverId && currentUser && currentUser.role === 'OWNER') {
+            approverId = currentUser.id;
+        }
+
+        if (!approverId) {
+            throw ApiError.badRequest('Discounts must be approved by an authorized OWNER. Please provide discount_approved_by');
         }
         if (!orderData.discount_reason || !orderData.discount_reason.trim()) {
             throw ApiError.badRequest('Discount reason is required when applying a discount');
         }
 
-        const approver = await orderModel.findUserRoleById(orderData.discount_approved_by);
+        const approver = await orderModel.findUserRoleById(approverId);
         if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
             throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
         }
@@ -124,20 +130,25 @@ const calculateAndValidateDiscount = async (orderData, subtotal) => {
             if (discountValue > 100) {
                 throw ApiError.badRequest('Percentage discount cannot exceed 100%');
             }
-            discountAmount = Number(((subtotal * discountValue) / 100).toFixed(2));
+            discountValue = Number(discountValue.toFixed(2));
+            // Strict MySQL ROUND((subtotal * discount_value) / 100, 2)
+            discountAmount = Number((Math.round(((subtotal * discountValue) / 100) * 100) / 100).toFixed(2));
         } else if (discountType === 'FIXED') {
+            discountValue = Number(discountValue.toFixed(2));
             if (discountValue > subtotal) {
-                throw ApiError.badRequest('Fixed discount cannot exceed order subtotal');
+                throw ApiError.badRequest(`Fixed discount ($${discountValue}) cannot exceed order subtotal ($${subtotal})`);
             }
-            discountAmount = Number(discountValue.toFixed(2));
+            discountAmount = discountValue; // Must strictly equal discount_value in DB
         }
 
-        discountApprovedBy = orderData.discount_approved_by;
+        discountApprovedBy = approverId;
         discountReason = orderData.discount_reason.trim();
     } else {
         discountType = 'NONE';
         discountValue = 0;
         discountAmount = 0;
+        discountApprovedBy = null;
+        discountReason = null;
     }
 
     return {
@@ -168,7 +179,7 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
     const { subtotal, preparedItems } = await prepareOrderItemsAndSubtotal(orderData.items);
 
     // 4. Calculate and validate discounts
-    const discount = await calculateAndValidateDiscount(orderData, subtotal);
+    const discount = await calculateAndValidateDiscount(orderData, subtotal, user);
 
     // 5. Execute Transaction
     const connection = await pool.getConnection();
@@ -345,9 +356,9 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
         throw ApiError.badRequest(`Cannot update order: order status is currently ${existingOrder.status}. Only OPEN orders can be updated.`);
     }
 
-    // 2. Authorization check: Only shift owner or OWNER can update
+    // 2. Authorization check: Only shift creator (STAFF) or OWNER can update
     if (user.role !== 'OWNER' && Number(existingOrder.cashier.id) !== Number(user.id)) {
-        throw ApiError.forbidden('You are not authorized to update this order. Only the cashier who created it or an OWNER can update it.');
+        throw ApiError.forbidden('You are not authorized to update this order. Only the staff who created it or an OWNER can update it.');
     }
 
     // 3. Verify Shift is still OPEN
@@ -365,19 +376,81 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
             : existingOrder.table_no;
     }
 
-    // 5. Prepare Items, Addons, and Subtotal
-    const { subtotal, preparedItems } = await prepareOrderItemsAndSubtotal(orderData.items);
+    // 5. Prepare Items if provided
+    let subtotal = existingOrder.subtotal;
+    let preparedItems = null;
 
-    // 6. Calculate and validate discounts
-    const discount = await calculateAndValidateDiscount(orderData, subtotal);
+    if (orderData.items && orderData.items.length > 0) {
+        const prepared = await prepareOrderItemsAndSubtotal(orderData.items);
+        subtotal = prepared.subtotal;
+        preparedItems = prepared.preparedItems;
+    }
 
-    // 7. Execute Transaction (delete old items, update order, insert new items & addons)
+    // 6. Handle Discount: validate new discount or re-calculate existing discount
+    let discount;
+    if (orderData.discount_type !== undefined || orderData.discount_value !== undefined) {
+        discount = await calculateAndValidateDiscount({
+            discount_type: orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type,
+            discount_value: orderData.discount_value !== undefined ? orderData.discount_value : existingOrder.discount.value,
+            discount_approved_by: orderData.discount_approved_by !== undefined ? orderData.discount_approved_by : existingOrder.discount.approved_by?.id,
+            discount_reason: orderData.discount_reason !== undefined ? orderData.discount_reason : existingOrder.discount.reason
+        }, subtotal, user);
+    } else if (existingOrder.discount && existingOrder.discount.type !== 'NONE') {
+        // Re-validate and re-calculate existing discount against updated subtotal
+        discount = await calculateAndValidateDiscount({
+            discount_type: existingOrder.discount.type,
+            discount_value: existingOrder.discount.value,
+            discount_approved_by: existingOrder.discount.approved_by?.id,
+            discount_reason: existingOrder.discount.reason
+        }, subtotal, user);
+    } else {
+        discount = {
+            discountType: 'NONE',
+            discountValue: 0,
+            discountAmount: 0,
+            discountApprovedBy: null,
+            discountReason: null
+        };
+    }
+
+    const note = orderData.note !== undefined 
+        ? (orderData.note && orderData.note.trim() ? orderData.note.trim() : null) 
+        : existingOrder.note;
+
+    // 7. Execute Transaction (delete old items only if new items provided, update order)
     const connection = await pool.getConnection();
     await connection.beginTransaction();
 
     try {
-        // Delete existing items (cascades to order_item_addons)
-        await orderModel.deleteOrderItemsByOrderId(orderId, connection);
+        if (preparedItems) {
+            // Delete existing items (cascades to order_item_addons)
+            await orderModel.deleteOrderItemsByOrderId(orderId, connection);
+
+            // Insert updated items
+            for (const item of preparedItems) {
+                const orderItemId = await orderModel.insertOrderItem({
+                    orderId,
+                    variantId: item.variant_id,
+                    productNameSnapshot: item.product_name_snapshot,
+                    variantNameSnapshot: item.variant_name_snapshot,
+                    quantity: item.quantity,
+                    unitPrice: item.unit_price,
+                    sugarLevel: item.sugar_level,
+                    iceLevel: item.ice_level,
+                    note: item.note
+                }, connection);
+
+                for (const addon of item.addons) {
+                    await orderModel.insertOrderItemAddon({
+                        orderItemId,
+                        addonVariantId: addon.addon_variant_id,
+                        addonNameSnapshot: addon.addon_name_snapshot,
+                        quantity: addon.quantity,
+                        unitPrice: addon.unit_price
+                    }, connection);
+                }
+            }
+        }
 
         // Update order record
         await orderModel.updateOrderById({
@@ -390,35 +463,8 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
             discountAmount: discount.discountAmount,
             discountApprovedBy: discount.discountApprovedBy,
             discountReason: discount.discountReason,
-            note: orderData.note !== undefined 
-                ? (orderData.note && orderData.note.trim() ? orderData.note.trim() : null) 
-                : existingOrder.note
+            note
         }, connection);
-
-        // Insert updated items
-        for (const item of preparedItems) {
-            const orderItemId = await orderModel.insertOrderItem({
-                orderId,
-                variantId: item.variant_id,
-                productNameSnapshot: item.product_name_snapshot,
-                variantNameSnapshot: item.variant_name_snapshot,
-                quantity: item.quantity,
-                unitPrice: item.unit_price,
-                sugarLevel: item.sugar_level,
-                iceLevel: item.ice_level,
-                note: item.note
-            }, connection);
-
-            for (const addon of item.addons) {
-                await orderModel.insertOrderItemAddon({
-                    orderItemId,
-                    addonVariantId: addon.addon_variant_id,
-                    addonNameSnapshot: addon.addon_name_snapshot,
-                    quantity: addon.quantity,
-                    unit_price: addon.unit_price
-                }, connection);
-            }
-        }
 
         await connection.commit();
     } catch (error) {
@@ -441,7 +487,7 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
                 subtotal,
                 discount_amount: discount.discountAmount,
                 total: Number((subtotal - discount.discountAmount).toFixed(2)),
-                items_count: preparedItems.length
+                items_updated: Boolean(preparedItems)
             },
             ipAddress
         });
@@ -454,9 +500,9 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
 };
 
 const cancelOrder = async ({ orderId, user, reason, ipAddress }) => {
-    // 1. Role Authorization: Only OWNER or CASHIER
-    if (user.role !== 'OWNER' && user.role !== 'CASHIER') {
-        throw ApiError.forbidden('You are not authorized to cancel orders. Only CASHIER or OWNER can cancel.');
+    // 1. Role Authorization: Only OWNER or STAFF
+    if (user.role !== 'OWNER' && user.role !== 'STAFF') {
+        throw ApiError.forbidden('You are not authorized to cancel orders. Only STAFF or OWNER can cancel.');
     }
 
     // 2. Verify Order Exists
@@ -465,8 +511,8 @@ const cancelOrder = async ({ orderId, user, reason, ipAddress }) => {
         throw ApiError.notFound('Order not found');
     }
 
-    // Cashier can only cancel their own order; OWNER can cancel any order
-    if (user.role === 'CASHIER' && Number(existingOrder.cashier.id) !== Number(user.id)) {
+    // Staff can only cancel their own order; OWNER can cancel any order
+    if (user.role === 'STAFF' && Number(existingOrder.cashier.id) !== Number(user.id)) {
         throw ApiError.forbidden('You can only cancel orders created under your own account. For orders by other staff, an OWNER must cancel.');
     }
 
@@ -480,6 +526,12 @@ const cancelOrder = async ({ orderId, user, reason, ipAddress }) => {
 
     if (existingOrder.status !== 'OPEN') {
         throw ApiError.badRequest(`Cannot cancel order with status ${existingOrder.status}`);
+    }
+
+    // Check that the order shift is not already closed
+    const orderShift = await shiftModel.findShiftById(existingOrder.shift_id);
+    if (orderShift && orderShift.status === 'CLOSED') {
+        throw ApiError.badRequest('Cannot cancel an order belonging to a closed shift');
     }
 
     const cleanReason = reason.trim();

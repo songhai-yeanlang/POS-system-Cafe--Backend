@@ -7,6 +7,8 @@ const calculateExpectedDrawer = (shift, rawSummary) => {
     let cashKhrIn = 0;
     let cashUsdChange = 0;
     let cashKhrChange = 0;
+    let bankTransferUsd = 0;
+    let bankTransferKhr = 0;
     let khqrUsd = 0;
     let khqrKhr = 0;
 
@@ -20,6 +22,9 @@ const calculateExpectedDrawer = (shift, rawSummary) => {
                 : p.total_amount;
             if (p.currency === 'USD') cashUsdIn += cashReceived;
             if (p.currency === 'KHR') cashKhrIn += cashReceived;
+        } else if (p.method === 'BANK_TRANSFER') {
+            if (p.currency === 'USD') bankTransferUsd += p.total_amount;
+            if (p.currency === 'KHR') bankTransferKhr += p.total_amount;
         } else if (p.method === 'KHQR') {
             if (p.currency === 'USD') khqrUsd += p.total_amount;
             if (p.currency === 'KHR') khqrKhr += p.total_amount;
@@ -59,6 +64,8 @@ const calculateExpectedDrawer = (shift, rawSummary) => {
         netCashKhr,
         khqrUsd,
         khqrKhr,
+        bankTransferUsd,
+        bankTransferKhr,
         cashExpensesUsd,
         cashExpensesKhr,
         cashRefundsUsd,
@@ -97,6 +104,10 @@ const buildShiftDetails = (shift, rawSummary) => {
                 in_khr: calc.cashKhrIn,
                 change_khr: calc.cashKhrChange,
                 net_khr: calc.netCashKhr
+            },
+            bank_transfer: {
+                usd: calc.bankTransferUsd,
+                khr: calc.bankTransferKhr
             },
             khqr: {
                 usd: calc.khqrUsd,
