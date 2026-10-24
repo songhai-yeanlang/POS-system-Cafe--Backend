@@ -22,18 +22,28 @@ const getCategoryById = async (id) => {
 };
 
 const createCategory = async ({ name, sort_order = 0, is_active = true, creatorId, ipAddress }) => {
+    const cleanName = name ? name.trim() : '';
+
     // 1. Check if category name is already registered
-    const existing = await productModel.findCategoryByName(name);
+    const existing = await productModel.findCategoryByName(cleanName);
     if (existing) {
         throw ApiError.conflict('Category name already exists');
     }
 
     // 2. Insert new category
-    const category = await productModel.insertCategory({
-        name,
-        sort_order,
-        is_active
-    });
+    let category;
+    try {
+        category = await productModel.insertCategory({
+            name: cleanName,
+            sort_order,
+            is_active
+        });
+    } catch (error) {
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict('Category name already exists');
+        }
+        throw error;
+    }
 
     // 3. Record audit log
     try {
@@ -42,7 +52,7 @@ const createCategory = async ({ name, sort_order = 0, is_active = true, creatorI
             action: 'CREATE_CATEGORY',
             tableName: 'categories',
             recordId: category.id,
-            details: { name, sort_order, is_active },
+            details: { name: cleanName, sort_order, is_active },
             ipAddress
         });
     } catch (err) {
@@ -59,16 +69,30 @@ const updateCategory = async ({ id, updateData, updaterId, ipAddress }) => {
         throw ApiError.notFound('Category not found');
     }
 
+    const cleanUpdate = { ...updateData };
+
     // 2. If name is being changed, check for conflict with other categories
-    if (updateData.name && updateData.name !== category.name) {
-        const existing = await productModel.findCategoryByNameExcludeId(updateData.name, id);
-        if (existing) {
-            throw ApiError.conflict('Category name already exists');
+    if (updateData.name !== undefined) {
+        const cleanName = updateData.name.trim();
+        if (cleanName.toLowerCase() !== category.name.toLowerCase()) {
+            const existing = await productModel.findCategoryByNameExcludeId(cleanName, id);
+            if (existing) {
+                throw ApiError.conflict('Category name already exists');
+            }
         }
+        cleanUpdate.name = cleanName;
     }
 
     // 3. Update category
-    const updatedCategory = await productModel.updateCategoryById(id, updateData);
+    let updatedCategory;
+    try {
+        updatedCategory = await productModel.updateCategoryById(id, cleanUpdate);
+    } catch (error) {
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict('Category name already exists');
+        }
+        throw error;
+    }
 
     // 4. Record audit log
     try {
@@ -77,7 +101,7 @@ const updateCategory = async ({ id, updateData, updaterId, ipAddress }) => {
             action: 'UPDATE_CATEGORY',
             tableName: 'categories',
             recordId: id,
-            details: updateData,
+            details: cleanUpdate,
             ipAddress
         });
     } catch (err) {
@@ -103,7 +127,16 @@ const deleteCategory = async ({ id, deleterId, ipAddress }) => {
     }
 
     // 3. Delete category from database
-    await productModel.deleteCategoryById(id);
+    try {
+        await productModel.deleteCategoryById(id);
+    } catch (error) {
+        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
+            throw ApiError.badRequest(
+                `Cannot delete category '${category.name}' because it is referenced by existing products.`
+            );
+        }
+        throw error;
+    }
 
     // 4. Record audit log
     try {
@@ -175,6 +208,9 @@ const createProduct = async ({
     creatorId,
     ipAddress
 }) => {
+    const cleanName = name ? name.trim() : '';
+    const cleanDesc = description && description.trim() ? description.trim() : null;
+
     // 1. Check if category exists
     const category = await productModel.findCategoryById(category_id);
     if (!category) {
@@ -182,15 +218,16 @@ const createProduct = async ({
     }
 
     // 2. Check for duplicate product name in the same category
-    const existingProduct = await productModel.findProductByNameAndCategory(name, category_id);
+    const existingProduct = await productModel.findProductByNameAndCategory(cleanName, category_id);
     if (existingProduct) {
-        throw ApiError.conflict(`Product '${name}' already exists in this category`);
+        throw ApiError.conflict(`Product '${cleanName}' already exists in this category`);
     }
 
     // 3. Ensure variant names are unique within this product
     const variantNames = new Set();
     for (const v of variants) {
-        const lowerName = v.name.toLowerCase();
+        const vCleanName = v.name.trim();
+        const lowerName = vCleanName.toLowerCase();
         if (variantNames.has(lowerName)) {
             throw ApiError.badRequest(`Duplicate variant name '${v.name}' in the same product`);
         }
@@ -206,22 +243,22 @@ const createProduct = async ({
         // 4a. Insert product record
         productId = await productModel.insertProduct({
             category_id,
-            name,
+            name: cleanName,
             product_type,
-            description,
+            description: cleanDesc,
             image,
-            is_active
+            is_active: is_active !== undefined ? Boolean(is_active) : true
         }, connection);
 
         // 4b. Prepare & insert variants
         if (variants && variants.length > 0) {
             const variantRows = variants.map((v) => [
                 productId,
-                v.name,
-                v.size || null,
+                v.name.trim(),
+                v.size && v.size.trim() ? v.size.trim() : null,
                 v.temperature || 'NONE',
-                v.price,
-                v.is_active !== undefined ? v.is_active : true
+                Number(Number(v.price).toFixed(2)),
+                v.is_active !== undefined ? Boolean(v.is_active) : true
             ]);
 
             await productModel.insertProductVariants(variantRows, connection);
@@ -230,6 +267,9 @@ const createProduct = async ({
         await connection.commit();
     } catch (error) {
         await connection.rollback();
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict(`Duplicate entry: a product or variant with this name already exists`);
+        }
         throw error;
     } finally {
         connection.release();
@@ -242,7 +282,7 @@ const createProduct = async ({
             action: 'CREATE_PRODUCT',
             tableName: 'products',
             recordId: productId,
-            details: { name, category_id, product_type, variant_count: variants.length },
+            details: { name: cleanName, category_id, product_type, variant_count: variants.length },
             ipAddress
         });
     } catch (err) {
@@ -270,8 +310,8 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
     }
 
     // 3. Check for name conflict in the target category
-    const targetName = updateData.name || currentProduct.name;
-    if ((updateData.name && updateData.name !== currentProduct.name) || updateData.category_id) {
+    const targetName = updateData.name ? updateData.name.trim() : currentProduct.name;
+    if ((updateData.name && updateData.name.trim() !== currentProduct.name) || updateData.category_id) {
         const conflict = await productModel.findProductByNameAndCategoryExcludeId(targetName, targetCategoryId, id);
         if (conflict) {
             throw ApiError.conflict(`Product '${targetName}' already exists in this category`);
@@ -282,7 +322,8 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
     if (updateData.variants) {
         const variantNames = new Set();
         for (const v of updateData.variants) {
-            const lowerName = v.name.toLowerCase();
+            const vCleanName = v.name.trim();
+            const lowerName = vCleanName.toLowerCase();
             if (variantNames.has(lowerName)) {
                 throw ApiError.badRequest(`Duplicate variant name '${v.name}' in the same product`);
             }
@@ -297,11 +338,21 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
 
         // 5a. Update main product fields
         const productFields = {};
-        for (const key of ['category_id', 'name', 'product_type', 'description', 'image', 'is_active']) {
+        for (const key of ['category_id', 'product_type', 'image']) {
             if (updateData[key] !== undefined) {
                 productFields[key] = updateData[key];
             }
         }
+        if (updateData.name !== undefined) {
+            productFields.name = updateData.name.trim();
+        }
+        if (updateData.description !== undefined) {
+            productFields.description = updateData.description && updateData.description.trim() ? updateData.description.trim() : null;
+        }
+        if (updateData.is_active !== undefined) {
+            productFields.is_active = Boolean(updateData.is_active);
+        }
+
         if (Object.keys(productFields).length > 0) {
             await productModel.updateProductById(id, productFields, connection);
         }
@@ -333,6 +384,12 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
             const updatedVariantIds = new Set();
 
             for (const v of updateData.variants) {
+                const vCleanName = v.name.trim();
+                const vCleanSize = v.size && v.size.trim() ? v.size.trim() : null;
+                const vCleanTemp = v.temperature || 'NONE';
+                const vCleanPrice = Number(Number(v.price).toFixed(2));
+                const vCleanActive = v.is_active !== undefined ? Boolean(v.is_active) : true;
+
                 if (v.id) {
                     if (!existingVariantMap.has(v.id)) {
                         throw ApiError.badRequest(`Variant with ID ${v.id} does not belong to this product`);
@@ -341,11 +398,11 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
                     await productModel.updateVariantById(
                         v.id,
                         {
-                            name: v.name,
-                            size: v.size || null,
-                            temperature: v.temperature || 'NONE',
-                            price: v.price,
-                            is_active: v.is_active !== undefined ? v.is_active : true
+                            name: vCleanName,
+                            size: vCleanSize,
+                            temperature: vCleanTemp,
+                            price: vCleanPrice,
+                            is_active: vCleanActive
                         },
                         connection
                     );
@@ -354,15 +411,14 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
                     // New variant to insert
                     newVariantsToInsert.push([
                         id,
-                        v.name,
-                        v.size || null,
-                        v.temperature || 'NONE',
-                        v.price,
-                        v.is_active !== undefined ? v.is_active : true
+                        vCleanName,
+                        vCleanSize,
+                        vCleanTemp,
+                        vCleanPrice,
+                        vCleanActive
                     ]);
                 }
             }
-
 
             // Insert newly added variants
             if (newVariantsToInsert.length > 0) {
@@ -387,6 +443,9 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
         await connection.commit();
     } catch (error) {
         await connection.rollback();
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict(`Duplicate entry: a product or variant with this name already exists`);
+        }
         throw error;
     } finally {
         connection.release();
@@ -429,7 +488,16 @@ const deleteProduct = async ({ id, deleterId, ipAddress }) => {
     }
 
     // 3. Delete product from database (cascade deletes product_variants and recipes)
-    await productModel.deleteProductById(id);
+    try {
+        await productModel.deleteProductById(id);
+    } catch (error) {
+        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
+            throw ApiError.badRequest(
+                `Cannot delete product '${product.name}' because it is referenced by existing order or stock records.`
+            );
+        }
+        throw error;
+    }
 
     // 4. Remove image file from disk if stored locally
     if (product.image && typeof product.image === 'string' && product.image.startsWith('/uploads/')) {

@@ -18,39 +18,51 @@ const findAllCategories = async ({ isActive, search } = {}) => {
 
     if (isActive !== undefined && isActive !== null) {
         sql += ` AND c.is_active = ?`;
-        params.push(isActive);
+        params.push(isActive ? 1 : 0);
     }
 
-    if (search) {
+    if (search && search.trim()) {
         sql += ` AND c.name LIKE ?`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
     }
 
     sql += ` GROUP BY c.id ORDER BY c.sort_order ASC, c.id ASC`;
     const [rows] = await pool.query(sql, params);
-    return rows;
+    return rows.map((c) => ({
+        ...c,
+        is_active: Boolean(c.is_active),
+        total_products: Number(c.total_products || 0)
+    }));
 };
 
 const findCategoryByName = async (name) => {
     const [rows] = await pool.query(
         `SELECT id, name, sort_order, is_active, created_at, updated_at 
          FROM categories 
-         WHERE name = ? 
+         WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) 
          LIMIT 1`,
         [name]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const findCategoryByNameExcludeId = async (name, excludeId) => {
     const [rows] = await pool.query(
         `SELECT id, name, sort_order, is_active, created_at, updated_at 
          FROM categories 
-         WHERE name = ? AND id != ? 
+         WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ? 
          LIMIT 1`,
         [name, excludeId]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const findCategoryById = async (id) => {
@@ -70,7 +82,12 @@ const findCategoryById = async (id) => {
          LIMIT 1`,
         [id]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active),
+        total_products: Number(rows[0].total_products || 0)
+    };
 };
 
 const countProductsByCategoryId = async (categoryId) => {
@@ -85,7 +102,7 @@ const insertCategory = async ({ name, sort_order = 0, is_active = true }) => {
     const [result] = await pool.query(
         `INSERT INTO categories (name, sort_order, is_active) 
          VALUES (?, ?, ?)`,
-        [name, sort_order, is_active]
+        [name.trim(), sort_order, is_active ? 1 : 0]
     );
     return await findCategoryById(result.insertId);
 };
@@ -98,7 +115,13 @@ const updateCategoryById = async (id, updateData = {}) => {
     for (const key of allowedFields) {
         if (updateData[key] !== undefined) {
             fields.push(`${key} = ?`);
-            values.push(updateData[key]);
+            if (key === 'is_active') {
+                values.push(updateData[key] ? 1 : 0);
+            } else if (key === 'name') {
+                values.push(updateData[key].trim());
+            } else {
+                values.push(updateData[key]);
+            }
         }
     }
 
@@ -169,11 +192,12 @@ const findProducts = async ({ categoryId, productType, isActive, search, limit, 
     }
     if (isActive !== undefined && isActive !== null) {
         sql += ` AND p.is_active = ?`;
-        params.push(isActive);
+        params.push(isActive ? 1 : 0);
     }
-    if (search) {
-        sql += ` AND (p.name LIKE ? OR p.description LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`);
+    if (search && search.trim()) {
+        sql += ` AND (p.name LIKE ? OR p.description LIKE ? OR c.name LIKE ?)`;
+        const s = `%${search.trim()}%`;
+        params.push(s, s, s);
     }
 
     sql += ` ORDER BY c.sort_order ASC, p.id ASC LIMIT ? OFFSET ?`;
@@ -190,7 +214,17 @@ const findProducts = async ({ categoryId, productType, isActive, search, limit, 
         }
         if (Array.isArray(p.variants)) {
             p.variants.sort((a, b) => a.id - b.id);
+            p.variants = p.variants.map((v) => ({
+                id: v.id,
+                product_id: v.product_id,
+                name: v.name,
+                size: v.size || null,
+                temperature: v.temperature || 'NONE',
+                price: Number(v.price),
+                is_active: Boolean(v.is_active)
+            }));
         }
+        p.is_active = Boolean(p.is_active);
     });
     return rows;
 };
@@ -214,11 +248,12 @@ const countProducts = async ({ categoryId, productType, isActive, search }) => {
     }
     if (isActive !== undefined && isActive !== null) {
         sql += ` AND p.is_active = ?`;
-        params.push(isActive);
+        params.push(isActive ? 1 : 0);
     }
-    if (search) {
-        sql += ` AND (p.name LIKE ? OR p.description LIKE ?)`;
-        params.push(`%${search}%`, `%${search}%`);
+    if (search && search.trim()) {
+        sql += ` AND (p.name LIKE ? OR p.description LIKE ? OR c.name LIKE ?)`;
+        const s = `%${search.trim()}%`;
+        params.push(s, s, s);
     }
 
     const [rows] = await pool.query(sql, params);
@@ -274,7 +309,17 @@ const findProductById = async (id) => {
     }
     if (Array.isArray(product.variants)) {
         product.variants.sort((a, b) => a.id - b.id);
+        product.variants = product.variants.map((v) => ({
+            id: v.id,
+            product_id: v.product_id,
+            name: v.name,
+            size: v.size || null,
+            temperature: v.temperature || 'NONE',
+            price: Number(v.price),
+            is_active: Boolean(v.is_active)
+        }));
     }
+    product.is_active = Boolean(product.is_active);
     return product;
 };
 
@@ -282,7 +327,7 @@ const findProductByNameAndCategory = async (name, categoryId) => {
     const [rows] = await pool.query(
         `SELECT id, name, category_id 
          FROM products 
-         WHERE name = ? AND category_id = ? 
+         WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND category_id = ? 
          LIMIT 1`,
         [name, categoryId]
     );
@@ -301,7 +346,7 @@ const insertProduct = async ({
     const [result] = await db.query(
         `INSERT INTO products (category_id, name, product_type, description, image, is_active)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [category_id, name, product_type, description, image, is_active]
+        [category_id, name.trim(), product_type, description, image, is_active ? 1 : 0]
     );
     return result.insertId;
 };
@@ -321,7 +366,7 @@ const findProductByNameAndCategoryExcludeId = async (name, categoryId, excludeId
     const [rows] = await pool.query(
         `SELECT id, name, category_id 
          FROM products 
-         WHERE name = ? AND category_id = ? AND id != ? 
+         WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND category_id = ? AND id != ? 
          LIMIT 1`,
         [name, categoryId, excludeId]
     );

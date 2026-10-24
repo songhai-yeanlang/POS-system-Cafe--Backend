@@ -163,8 +163,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
   UNIQUE KEY uq_ingredients_name (name),
 
   CONSTRAINT chk_ingredients_name CHECK (CHAR_LENGTH(TRIM(name)) > 0),
-  CONSTRAINT chk_ingredients_minimum
-    CHECK (minimum_stock >= 0 AND current_stock >= 0)
+  CONSTRAINT chk_ingredients_minimum CHECK (minimum_stock >= 0)
 ) ENGINE=InnoDB;
 
 
@@ -204,8 +203,8 @@ CREATE TABLE IF NOT EXISTS shifts (
   closed_at DATETIME NULL,
   opening_cash_usd DECIMAL(14,2) NOT NULL DEFAULT 0,
   opening_cash_khr DECIMAL(14,2) NOT NULL DEFAULT 0,
-  expected_cash_usd DECIMAL(14,2) NULL COMMENT 'System calculated USD at shift close',
-  expected_cash_khr DECIMAL(14,2) NULL COMMENT 'System calculated KHR at shift close',
+  expected_cash_usd DECIMAL(14,2) NULL COMMENT 'System calculated USD at shift close (can be negative if swapped)',
+  expected_cash_khr DECIMAL(14,2) NULL COMMENT 'System calculated KHR at shift close (can be negative if swapped)',
   closing_cash_usd DECIMAL(14,2) NULL COMMENT 'Actual counted USD by staff',
   closing_cash_khr DECIMAL(14,2) NULL COMMENT 'Actual counted KHR by staff',
   status ENUM('OPEN', 'CLOSED') NOT NULL DEFAULT 'OPEN',
@@ -224,8 +223,6 @@ CREATE TABLE IF NOT EXISTS shifts (
   CONSTRAINT chk_shifts_cash CHECK (
     opening_cash_usd >= 0
     AND opening_cash_khr >= 0
-    AND (expected_cash_usd IS NULL OR expected_cash_usd >= 0)
-    AND (expected_cash_khr IS NULL OR expected_cash_khr >= 0)
     AND (closing_cash_usd IS NULL OR closing_cash_usd >= 0)
     AND (closing_cash_khr IS NULL OR closing_cash_khr >= 0)
   ),
@@ -455,29 +452,30 @@ CREATE TABLE IF NOT EXISTS payments (
   order_id BIGINT UNSIGNED NOT NULL,
   shift_id BIGINT UNSIGNED NOT NULL,
   received_by BIGINT UNSIGNED NOT NULL,
-  method ENUM('CASH', 'KHQR') NOT NULL,
+  method ENUM('CASH', 'BANK_TRANSFER', 'KHQR') NOT NULL DEFAULT 'CASH',
+  bank_name VARCHAR(50) NULL COMMENT 'e.g. ABA, ACLEDA, WING (NULL when method = CASH)',
   currency ENUM('USD', 'KHR') NOT NULL,
   amount DECIMAL(14,2) NOT NULL COMMENT 'Bill amount in payment currency, excluding change',
   exchange_rate DECIMAL(14,6) NOT NULL COMMENT '1 for USD; KHR per USD for KHR',
   khr_per_usd DECIMAL(14,6) NOT NULL COMMENT 'Historical shop KHR/USD rate snapshot at payment time',
   amount_usd DECIMAL(14,2) NOT NULL COMMENT 'Equivalent USD applied to order total',
 
-  received_amount DECIMAL(14,2) NULL COMMENT 'Cash handed by customer in payment currency',
+  received_amount DECIMAL(14,2) NOT NULL COMMENT 'Amount manually typed by cashier (Cash handed or Bank transferred)',
   change_usd DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT 'Physical USD cash given as change',
   change_khr DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT 'Physical KHR cash given as change',
 
   status ENUM('PENDING', 'COMPLETED', 'FAILED', 'CANCELLED')
-    NOT NULL DEFAULT 'PENDING',
-  reference VARCHAR(150) NULL,
+    NOT NULL DEFAULT 'COMPLETED',
+  reference VARCHAR(150) NULL COMMENT 'Optional bank ref number or note',
   idempotency_key VARCHAR(100) NOT NULL,
-  paid_at DATETIME NULL,
+  paid_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ON UPDATE CURRENT_TIMESTAMP,
 
   UNIQUE KEY uq_payments_id_order (id, order_id),
   UNIQUE KEY uq_payments_request (idempotency_key),
-  UNIQUE KEY uq_payments_reference (method, reference),
+  KEY idx_payments_reference (method, reference),
   KEY idx_payments_order_status (order_id, status),
   KEY idx_payments_shift_status (shift_id, status),
   KEY idx_payments_paid_date (status, paid_at),
@@ -494,8 +492,14 @@ CREATE TABLE IF NOT EXISTS payments (
   CONSTRAINT chk_payments_amount CHECK (
     amount > 0
     AND amount_usd > 0
+    AND received_amount >= amount
     AND change_usd >= 0
     AND change_khr >= 0
+  ),
+
+  CONSTRAINT chk_payments_bank_info CHECK (
+    (method = 'CASH' AND bank_name IS NULL)
+    OR (method IN ('BANK_TRANSFER', 'KHQR') AND (bank_name IS NULL OR CHAR_LENGTH(TRIM(bank_name)) > 0))
   ),
 
   CONSTRAINT chk_payments_rate CHECK (
@@ -513,6 +517,7 @@ CREATE TABLE IF NOT EXISTS payments (
     )
     OR
     (
+     
       currency = 'KHR' AND ABS(amount_usd - ROUND(amount / exchange_rate, 2)) <= 0.05
     )
   ),
@@ -520,14 +525,12 @@ CREATE TABLE IF NOT EXISTS payments (
   CONSTRAINT chk_payments_cash CHECK (
     (
       method = 'CASH'
-      AND received_amount IS NOT NULL
-      AND received_amount >= amount
       AND (
-        -- Same-currency USD change: exact match required
+      
         (currency = 'USD' AND change_khr = 0 AND received_amount - amount = change_usd)
-        -- Same-currency KHR change: exact match required
+       
         OR (currency = 'KHR' AND change_usd = 0 AND received_amount - amount = change_khr)
-        -- Cross-currency change: allow <= $0.05 tolerance for 100-KHR banknote rounding
+       
         OR (
           ABS(
             ((received_amount - amount) / exchange_rate)
@@ -538,8 +541,9 @@ CREATE TABLE IF NOT EXISTS payments (
     )
     OR
     (
-      method = 'KHQR'
-      AND (received_amount IS NULL OR received_amount = amount)
+     
+      method IN ('BANK_TRANSFER', 'KHQR')
+      AND received_amount = amount
       AND change_usd = 0
       AND change_khr = 0
     )
@@ -549,10 +553,6 @@ CREATE TABLE IF NOT EXISTS payments (
     (
       status = 'COMPLETED'
       AND paid_at IS NOT NULL
-      AND (
-        method <> 'KHQR'
-        OR (reference IS NOT NULL AND CHAR_LENGTH(TRIM(reference)) > 0)
-      )
     )
     OR
     (
@@ -572,7 +572,7 @@ CREATE TABLE IF NOT EXISTS refunds (
   payment_id BIGINT UNSIGNED NOT NULL,
   shift_id BIGINT UNSIGNED NOT NULL,
   approved_by BIGINT UNSIGNED NOT NULL,
-  method ENUM('CASH', 'KHQR') NOT NULL,
+  method ENUM('CASH', 'BANK_TRANSFER', 'KHQR') NOT NULL DEFAULT 'CASH',
   currency ENUM('USD', 'KHR') NOT NULL,
   amount DECIMAL(14,2) NOT NULL,
   exchange_rate DECIMAL(14,6) NOT NULL,
@@ -581,9 +581,9 @@ CREATE TABLE IF NOT EXISTS refunds (
 
   reason VARCHAR(500) NOT NULL,
   status ENUM('PENDING', 'COMPLETED', 'FAILED')
-    NOT NULL DEFAULT 'PENDING',
+    NOT NULL DEFAULT 'COMPLETED',
   reference VARCHAR(150) NULL,
-  refunded_at DATETIME NULL,
+  refunded_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ON UPDATE CURRENT_TIMESTAMP,

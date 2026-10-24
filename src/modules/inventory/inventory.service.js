@@ -27,7 +27,8 @@ const getAllIngredients = async (queryParams = {}) => {
         const ingredients = rows.map((row) => ({
             ...row,
             is_active: Boolean(row.is_active),
-            is_low_stock: Boolean(row.is_low_stock)
+            is_low_stock: Boolean(row.is_low_stock),
+            total_recipes: Number(row.total_recipes || 0)
         }));
 
         return {
@@ -49,7 +50,8 @@ const getAllIngredients = async (queryParams = {}) => {
     const ingredients = rows.map((row) => ({
         ...row,
         is_active: Boolean(row.is_active),
-        is_low_stock: Boolean(row.is_low_stock)
+        is_low_stock: Boolean(row.is_low_stock),
+        total_recipes: Number(row.total_recipes || 0)
     }));
 
     return {
@@ -82,7 +84,8 @@ const getLowStockIngredients = async (queryParams = {}) => {
         const ingredients = rows.map((row) => ({
             ...row,
             is_active: Boolean(row.is_active),
-            is_low_stock: true
+            is_low_stock: true,
+            total_recipes: Number(row.total_recipes || 0)
         }));
 
         return {
@@ -104,7 +107,8 @@ const getLowStockIngredients = async (queryParams = {}) => {
     const ingredients = rows.map((row) => ({
         ...row,
         is_active: Boolean(row.is_active),
-        is_low_stock: true
+        is_low_stock: true,
+        total_recipes: Number(row.total_recipes || 0)
     }));
 
     return {
@@ -127,25 +131,62 @@ const getIngredientById = async (id) => {
     return {
         ...ingredient,
         is_active: Boolean(ingredient.is_active),
-        is_low_stock: Boolean(ingredient.is_low_stock)
+        is_low_stock: Boolean(ingredient.is_low_stock),
+        total_recipes: Number(ingredient.total_recipes || 0)
     };
 };
 
 const createIngredient = async ({ name, unit, current_stock = 0, minimum_stock = 0, is_active = true, creatorId, ipAddress }) => {
-    // 1. Check if ingredient name already exists
-    const existing = await inventoryModel.findIngredientByName(name);
+    const cleanName = name ? name.trim() : '';
+
+    // 1. Check if ingredient name already exists (case-insensitive)
+    const existing = await inventoryModel.findIngredientByName(cleanName);
     if (existing) {
         throw ApiError.conflict('Ingredient name already exists');
     }
 
-    // 2. Insert new ingredient
-    const insertId = await inventoryModel.insertIngredient({
-        name,
-        unit,
-        current_stock,
-        minimum_stock,
-        is_active
-    });
+    const cleanCurrentStock = Number(Number(current_stock || 0).toFixed(4));
+    const cleanMinimumStock = Number(Number(minimum_stock || 0).toFixed(4));
+    const cleanIsActive = is_active !== undefined ? Boolean(is_active) : true;
+
+    // 2. Insert new ingredient in database transaction
+    const connection = await pool.getConnection();
+    let insertId;
+
+    try {
+        await connection.beginTransaction();
+
+        insertId = await inventoryModel.insertIngredient({
+            name: cleanName,
+            unit,
+            current_stock: cleanCurrentStock,
+            minimum_stock: cleanMinimumStock,
+            is_active: cleanIsActive
+        }, connection);
+
+        // If created with initial stock > 0, record initial stock movement ledger entry
+        if (cleanCurrentStock > 0 && creatorId) {
+            await inventoryModel.insertStockMovement({
+                ingredientId: insertId,
+                movementType: 'ADJUSTMENT',
+                quantityChange: cleanCurrentStock,
+                unitCost: null,
+                reason: 'Initial stock on ingredient creation',
+                idempotencyKey: null,
+                createdBy: creatorId
+            }, connection);
+        }
+
+        await connection.commit();
+    } catch (error) {
+        await connection.rollback();
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict('Ingredient name already exists');
+        }
+        throw error;
+    } finally {
+        connection.release();
+    }
 
     // 3. Record audit log
     try {
@@ -154,7 +195,7 @@ const createIngredient = async ({ name, unit, current_stock = 0, minimum_stock =
             action: 'CREATE_INGREDIENT',
             tableName: 'ingredients',
             recordId: insertId,
-            details: { name, unit, current_stock, minimum_stock, is_active },
+            details: { name: cleanName, unit, current_stock: cleanCurrentStock, minimum_stock: cleanMinimumStock, is_active: cleanIsActive },
             ipAddress
         });
     } catch (err) {
@@ -166,7 +207,8 @@ const createIngredient = async ({ name, unit, current_stock = 0, minimum_stock =
     return {
         ...created,
         is_active: Boolean(created.is_active),
-        is_low_stock: Boolean(created.is_low_stock)
+        is_low_stock: Boolean(created.is_low_stock),
+        total_recipes: 0
     };
 };
 
@@ -177,37 +219,109 @@ const updateIngredient = async ({ id, updateData, updaterId, ipAddress }) => {
         throw ApiError.notFound('Ingredient not found');
     }
 
-    // 2. If name is being changed, check for conflict with other ingredients
-    if (updateData.name && updateData.name !== existing.name) {
-        const conflict = await inventoryModel.findIngredientByNameExcludeId(updateData.name, id);
-        if (conflict) {
-            throw ApiError.conflict('Ingredient name already exists');
+    const cleanUpdate = {};
+
+    // 2. Validate and clean name
+    if (updateData.name !== undefined) {
+        const cleanName = updateData.name.trim();
+        if (cleanName.toLowerCase() !== existing.name.toLowerCase()) {
+            const conflict = await inventoryModel.findIngredientByNameExcludeId(cleanName, id);
+            if (conflict) {
+                throw ApiError.conflict('Ingredient name already exists');
+            }
         }
+        cleanUpdate.name = cleanName;
     }
 
-    // 3. Update ingredient in database
-    await inventoryModel.updateIngredientById(id, updateData);
+    // 3. Prevent unit modification if already referenced by recipes
+    if (updateData.unit !== undefined && updateData.unit !== existing.unit) {
+        const recipeCount = Number(existing.total_recipes || 0);
+        if (recipeCount > 0) {
+            throw ApiError.badRequest(
+                `Cannot change unit of ingredient '${existing.name}' from ${existing.unit} to ${updateData.unit} because it is used in ${recipeCount} recipe(s). Please update or remove the recipes first.`
+            );
+        }
+        cleanUpdate.unit = updateData.unit;
+    }
 
-    // 4. Record audit log
+    // 4. Stock adjustment calculation
+    let stockDiff = 0;
+    if (updateData.current_stock !== undefined) {
+        const newStock = Number(Number(updateData.current_stock).toFixed(4));
+        const oldStock = Number(existing.current_stock);
+        stockDiff = Number((newStock - oldStock).toFixed(4));
+        cleanUpdate.current_stock = newStock;
+    }
+
+    if (updateData.minimum_stock !== undefined) {
+        cleanUpdate.minimum_stock = Number(Number(updateData.minimum_stock).toFixed(4));
+    }
+
+    if (updateData.is_active !== undefined) {
+        cleanUpdate.is_active = Boolean(updateData.is_active);
+    }
+
+    // 5. Update ingredient and record movement in transaction
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        await inventoryModel.updateIngredientById(id, cleanUpdate, connection);
+
+        // If current_stock was changed manually, record an ADJUSTMENT stock movement
+        if (stockDiff !== 0 && updaterId) {
+            await inventoryModel.insertStockMovement({
+                ingredientId: id,
+                movementType: 'ADJUSTMENT',
+                quantityChange: stockDiff,
+                unitCost: null,
+                reason: 'Manual stock adjustment via ingredient update',
+                idempotencyKey: null,
+                createdBy: updaterId
+            }, connection);
+        }
+
+        await connection.commit();
+    } catch (error) {
+        await connection.rollback();
+        if (error.errno === 1062 || error.code === 'ER_DUP_ENTRY') {
+            throw ApiError.conflict('Ingredient name already exists');
+        }
+        throw error;
+    } finally {
+        connection.release();
+    }
+
+    // 6. Record audit log
     try {
         await auditLogsModel.insertAuditLog({
             userId: updaterId || null,
             action: 'UPDATE_INGREDIENT',
             tableName: 'ingredients',
             recordId: id,
-            details: updateData,
+            details: {
+                ...cleanUpdate,
+                previous: {
+                    name: existing.name,
+                    unit: existing.unit,
+                    current_stock: existing.current_stock,
+                    minimum_stock: existing.minimum_stock,
+                    is_active: existing.is_active
+                }
+            },
             ipAddress
         });
     } catch (err) {
         console.error('Failed to write audit log for updateIngredient:', err.message);
     }
 
-    // 5. Retrieve updated record and format
+    // 7. Retrieve updated record and format
     const updated = await inventoryModel.findIngredientById(id);
     return {
         ...updated,
         is_active: Boolean(updated.is_active),
-        is_low_stock: Boolean(updated.is_low_stock)
+        is_low_stock: Boolean(updated.is_low_stock),
+        total_recipes: Number(updated.total_recipes || 0)
     };
 };
 
@@ -235,7 +349,14 @@ const deleteIngredient = async ({ id, deleterId, ipAddress }) => {
     }
 
     // 4. Delete ingredient
-    await inventoryModel.deleteIngredientById(id);
+    try {
+        await inventoryModel.deleteIngredientById(id);
+    } catch (error) {
+        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
+            throw ApiError.badRequest(`Cannot delete ingredient '${ingredient.name}' because it is referenced by other records.`);
+        }
+        throw error;
+    }
 
     // 5. Record audit log
     try {
