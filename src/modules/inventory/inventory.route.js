@@ -28,10 +28,10 @@ router.post('/ingredients', authenticate, authorize('OWNER'), validate(createIng
 router.put('/ingredients/:id', authenticate, authorize('OWNER'), validate(updateIngredientSchema), inventoryController.updateIngredient);
 router.delete('/ingredients/:id', authenticate, authorize('OWNER'), validate(deleteIngredientSchema), inventoryController.deleteIngredient);
 
-// stock_movements
-router.get('/movements', authenticate, validate(getStockMovementsQuerySchema), inventoryController.getStockMovements);
-router.get('/movements/:id', authenticate, validate(getStockMovementByIdSchema), inventoryController.getStockMovementById);
-router.post('/movements', authenticate, authorize('OWNER'), validate(createStockMovementSchema), inventoryController.createStockMovement);
+//stock movements
+router.get('/stock-movements', authenticate, validate(getStockMovementsQuerySchema), inventoryController.getStockMovements);
+router.get('/stock-movements/:id', authenticate, validate(getStockMovementByIdSchema), inventoryController.getStockMovementById);
+router.post('/stock-movements', authenticate, authorize('OWNER'), validate(createStockMovementSchema), inventoryController.createStockMovement);
 
 // recipes
 router.get('/recipes', authenticate, validate(getAllRecipesQuerySchema), inventoryController.getAllRecipes);

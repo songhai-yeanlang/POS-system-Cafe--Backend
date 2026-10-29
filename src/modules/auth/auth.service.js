@@ -336,15 +336,11 @@ const changePassword = async ({ userId, currentPassword, newPassword, ipAddress 
 };
 
 const forgotPassword = async ({ email, ipAddress }) => {
-    // 1. Check if user exists
     const user = await authModel.findUserByEmail(email);
-    if (!user) {
-        throw ApiError.notFound('No account found with this email');
-    }
-
-    // 2. Check if user is active
-    if (!user.is_active) {
-        throw ApiError.forbidden('This account has been deactivated. Please contact the administrator.');
+    if (!user || !user.is_active) {
+        return {
+            message: 'OTP has been sent to your email'
+        };
     }
 
     // 3. Cooldown protection: Check if user requested an OTP less than 60 seconds ago
