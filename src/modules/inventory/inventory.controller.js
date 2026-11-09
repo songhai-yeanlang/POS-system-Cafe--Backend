@@ -144,6 +144,24 @@ const createStockMovement = async (req, res, next) => {
     }
 };
 
+const deleteStockMovement = async (req, res, next) => {
+    try {
+        const ipAddress = req.ip || req.socket?.remoteAddress || null;
+        await inventoryService.deleteStockMovement({
+            id: req.params.id,
+            deleterId: req.user?.id,
+            ipAddress
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Stock movement deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 const getAllRecipes = async (req, res, next) => {
     try {
         const result = await inventoryService.getAllRecipes(req.query);
@@ -232,6 +250,7 @@ module.exports = {
     getStockMovements,
     getStockMovementById,
     createStockMovement,
+    deleteStockMovement,
     getAllRecipes,
     getRecipeByVariantId,
     getRecipeByProductId,

@@ -51,8 +51,24 @@ const createAuditLog = async ({ userId, action, tableName, recordId, details, ip
     });
 };
 
+const deleteAuditLog = async (id) => {
+    const log = await auditLogsModel.findAuditLogById(id);
+    if (!log) {
+        throw ApiError.notFound(`Audit log with ID ${id} not found`);
+    }
+    await auditLogsModel.deleteAuditLogById(id);
+    return true;
+};
+
+const clearAuditLogs = async () => {
+    await auditLogsModel.clearAllAuditLogs();
+    return true;
+};
+
 module.exports = {
     getAllAuditLogs,
     getAuditLogById,
-    createAuditLog
+    createAuditLog,
+    deleteAuditLog,
+    clearAuditLogs
 };

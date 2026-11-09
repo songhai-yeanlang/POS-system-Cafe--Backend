@@ -208,6 +208,8 @@ const getTopProducts = async ({ startDate, endDate, categoryId, limit = 10 } = {
         WITH combined_items AS (
             SELECT 
                 oi.variant_id,
+                oi.product_name_snapshot,
+                oi.variant_name_snapshot,
                 oi.quantity,
                 oi.line_total,
                 o.id AS order_id
@@ -219,6 +221,8 @@ const getTopProducts = async ({ startDate, endDate, categoryId, limit = 10 } = {
 
             SELECT 
                 oia.addon_variant_id AS variant_id,
+                oia.addon_name_snapshot AS product_name_snapshot,
+                'Add-on' AS variant_name_snapshot,
                 oia.quantity,
                 oia.line_total,
                 o.id AS order_id
@@ -228,21 +232,21 @@ const getTopProducts = async ({ startDate, endDate, categoryId, limit = 10 } = {
             WHERE o.status = 'PAID' ${dateFilter}
         )
         SELECT 
-            pv.id AS variant_id,
-            pv.name AS variant_name,
+            ci.variant_id,
+            COALESCE(pv.name, MAX(ci.variant_name_snapshot)) AS variant_name,
             p.id AS product_id,
-            p.name AS product_name,
-            p.product_type,
+            COALESCE(p.name, MAX(ci.product_name_snapshot)) AS product_name,
+            COALESCE(p.product_type, 'DRINK') AS product_type,
             c.id AS category_id,
-            c.name AS category_name,
+            COALESCE(c.name, 'Uncategorized') AS category_name,
             CAST(COALESCE(SUM(ci.quantity), 0) AS UNSIGNED) AS total_quantity_sold,
             CAST(COALESCE(SUM(ci.line_total), 0) AS DOUBLE) AS total_revenue_usd
         FROM combined_items ci
-        JOIN product_variants pv ON pv.id = ci.variant_id
-        JOIN products p ON p.id = pv.product_id
-        JOIN categories c ON c.id = p.category_id
+        LEFT JOIN product_variants pv ON pv.id = ci.variant_id
+        LEFT JOIN products p ON p.id = pv.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
         WHERE 1 = 1 ${categoryFilter}
-        GROUP BY pv.id, pv.name, p.id, p.name, p.product_type, c.id, c.name
+        GROUP BY ci.variant_id, pv.name, p.id, p.name, p.product_type, c.id, c.name
         ORDER BY total_quantity_sold DESC, total_revenue_usd DESC
         LIMIT ?
     `;

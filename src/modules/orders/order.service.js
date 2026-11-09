@@ -568,10 +568,39 @@ const cancelOrder = async ({ orderId, user, reason, ipAddress }) => {
     return await orderModel.findOrderById(orderId);
 };
 
+const deleteOrder = async ({ orderId, user, ipAddress }) => {
+    const existingOrder = await orderModel.findOrderById(orderId);
+    if (!existingOrder) {
+        throw ApiError.notFound('Order not found');
+    }
+
+    await orderModel.deleteOrderById(orderId);
+
+    try {
+        await auditLogsModel.insertAuditLog({
+            userId: user?.id || null,
+            action: 'DELETE_ORDER',
+            tableName: 'orders',
+            recordId: orderId,
+            details: {
+                receipt_no: existingOrder.receipt_no,
+                status: existingOrder.status,
+                total: existingOrder.total
+            },
+            ipAddress
+        });
+    } catch (err) {
+        console.error('Failed to write audit log for deleteOrder:', err.message);
+    }
+
+    return true;
+};
+
 module.exports = {
     createOrder,
     getOrderById,
     getAllOrders,
     updateOrder,
-    cancelOrder
+    cancelOrder,
+    deleteOrder
 };

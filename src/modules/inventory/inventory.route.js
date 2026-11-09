@@ -10,6 +10,7 @@ const {
     updateIngredientSchema,
     getStockMovementsQuerySchema,
     getStockMovementByIdSchema,
+    deleteStockMovementSchema,
     createStockMovementSchema,
     getAllRecipesQuerySchema,
     getRecipeByProductIdSchema,
@@ -32,6 +33,7 @@ router.delete('/ingredients/:id', authenticate, authorize('OWNER'), validate(del
 router.get('/stock-movements', authenticate, validate(getStockMovementsQuerySchema), inventoryController.getStockMovements);
 router.get('/stock-movements/:id', authenticate, validate(getStockMovementByIdSchema), inventoryController.getStockMovementById);
 router.post('/stock-movements', authenticate, authorize('OWNER'), validate(createStockMovementSchema), inventoryController.createStockMovement);
+router.delete('/stock-movements/:id', authenticate, authorize('OWNER'), validate(deleteStockMovementSchema), inventoryController.deleteStockMovement);
 
 // recipes
 router.get('/recipes', authenticate, validate(getAllRecipesQuerySchema), inventoryController.getAllRecipes);

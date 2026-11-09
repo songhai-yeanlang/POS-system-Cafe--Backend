@@ -175,21 +175,13 @@ const deleteUser = async ({ id, removerId, ipAddress }) => {
         }
     }
 
-    // 4. Check if user has transaction history (orders, shifts, expenses)
-    const hasTransactions = await userModel.checkUserHasTransactions(id);
-    if (hasTransactions) {
-        throw ApiError.badRequest(
-            'Cannot delete this user because they have transaction history (orders, shifts, or expenses). Please deactivate the user instead to preserve sales records.'
-        );
-    }
-
-    // 5. Revoke all active sessions for this user
+    // 4. Revoke all active sessions for this user
     await userModel.revokeUserSessions(id);
 
-    // 6. Delete user from database
-    await userModel.deleteUserById(id);
+    // 5. Delete user from database (reassigning any historical transactions to removerId)
+    await userModel.deleteUserById(id, removerId);
 
-    // 7. Audit log
+    // 6. Audit log
     try {
         await auditLogsModel.insertAuditLog({
             userId: removerId || null,

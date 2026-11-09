@@ -352,6 +352,35 @@ const getCategories = () => {
     return DEFAULT_EXPENSE_CATEGORIES;
 };
 
+const deleteExpense = async ({ id, user, ipAddress }) => {
+    const existing = await expensesModel.findExpenseById(id);
+    if (!existing) {
+        throw ApiError.notFound(`Expense #${id} not found`);
+    }
+
+    await expensesModel.deleteExpenseById(id);
+
+    try {
+        await auditLogsModel.insertAuditLog({
+            userId: user?.id || null,
+            action: 'DELETE_EXPENSE',
+            tableName: 'expenses',
+            recordId: id,
+            details: {
+                category: existing.category,
+                description: existing.description,
+                amount: existing.amount,
+                currency: existing.currency
+            },
+            ipAddress
+        });
+    } catch (err) {
+        console.error('Failed to log audit for deleteExpense:', err.message);
+    }
+
+    return true;
+};
+
 module.exports = {
     DEFAULT_EXPENSE_CATEGORIES,
     createExpense,
@@ -360,5 +389,6 @@ module.exports = {
     updateExpense,
     voidExpense,
     getExpenseSummary,
-    getCategories
+    getCategories,
+    deleteExpense
 };

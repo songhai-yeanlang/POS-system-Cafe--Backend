@@ -550,6 +550,57 @@ const countAllOrders = async ({
     return rows[0].total;
 };
 
+const deleteOrderById = async (orderId) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        // Reverse any net stock change caused by this order (e.g., if order was PAID and not REFUNDED)
+        const [stockRows] = await connection.query(
+            `SELECT ingredient_id, SUM(quantity_change) AS net_change
+             FROM stock_movements
+             WHERE order_id = ?
+             GROUP BY ingredient_id`,
+            [orderId]
+        );
+        for (const row of stockRows) {
+            const netChange = Number(row.net_change || 0);
+            if (netChange !== 0) {
+                await connection.query(
+                    `UPDATE ingredients
+                     SET current_stock = GREATEST(0, current_stock - ?)
+                     WHERE id = ?`,
+                    [netChange, row.ingredient_id]
+                );
+            }
+        }
+
+        await connection.query('DELETE FROM stock_movements WHERE order_id = ?', [orderId]);
+        await connection.query('DELETE FROM refunds WHERE order_id = ?', [orderId]);
+        await connection.query('DELETE FROM payments WHERE order_id = ?', [orderId]);
+        await connection.query(
+            `DELETE oia FROM order_item_addons oia
+             JOIN order_items oi ON oi.id = oia.order_item_id
+             WHERE oi.order_id = ?`,
+            [orderId]
+        );
+        await connection.query('DELETE FROM order_items WHERE order_id = ?', [orderId]);
+        const [result] = await connection.query('DELETE FROM orders WHERE id = ?', [orderId]);
+
+        await connection.commit();
+        return result.affectedRows > 0;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
+};
+
 module.exports = {
     generateReceiptNo,
     getNextQueueNo,
@@ -563,5 +614,6 @@ module.exports = {
     insertOrderItemAddon,
     findOrderById,
     findAllOrders,
-    countAllOrders
+    countAllOrders,
+    deleteOrderById
 };

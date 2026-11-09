@@ -122,18 +122,53 @@ const revokeUserSessions = async (userId) => {
     );
 };
 
-const deleteUserById = async (id) => {
-    // Preserve historical audit logs by setting user_id to NULL before deleting user
-    await pool.query(
-        'UPDATE audit_logs SET user_id = NULL WHERE user_id = ?',
-        [id]
-    );
+const deleteUserById = async (id, fallbackUserId = null) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
 
-    const [result] = await pool.query(
-        'DELETE FROM users WHERE id = ?',
-        [id]
-    );
-    return result.affectedRows;
+        // Preserve historical audit logs by setting user_id to NULL before deleting user
+        await connection.query('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?', [id]);
+
+        if (fallbackUserId) {
+            // Auto-close any OPEN shift of the deleted user first so uq_shifts_one_open_per_user is never violated
+            await connection.query(
+                `UPDATE shifts SET
+                    status = 'CLOSED',
+                    closed_at = CURRENT_TIMESTAMP,
+                    expected_cash_usd = opening_cash_usd,
+                    expected_cash_khr = opening_cash_khr,
+                    closing_cash_usd = opening_cash_usd,
+                    closing_cash_khr = opening_cash_khr
+                 WHERE user_id = ? AND status = 'OPEN'`,
+                [id]
+            );
+
+            await connection.query('UPDATE orders SET cashier_id = ? WHERE cashier_id = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE orders SET cancelled_by = ? WHERE cancelled_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE orders SET discount_approved_by = ? WHERE discount_approved_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE shifts SET user_id = ? WHERE user_id = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE expenses SET created_by = ? WHERE created_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE expenses SET voided_by = ? WHERE voided_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE payments SET received_by = ? WHERE received_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE refunds SET approved_by = ? WHERE approved_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE stock_movements SET created_by = ? WHERE created_by = ?', [fallbackUserId, id]);
+        }
+
+        const [result] = await connection.query('DELETE FROM users WHERE id = ?', [id]);
+
+        await connection.commit();
+        return result.affectedRows;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
 };
 
 const countActiveOwners = async () => {

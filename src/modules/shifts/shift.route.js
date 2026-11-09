@@ -6,9 +6,10 @@ const {
     openShiftSchema,
     getShiftByIdSchema,
     closeShiftSchema,
-    getAllShiftsQuerySchema
+    getAllShiftsQuerySchema,
+    deleteShiftSchema
 } = require('./shift.validation');
-const { authenticate } = require('../../middlewares/authenticate');
+const { authenticate, authorize } = require('../../middlewares/authenticate');
 const validate = require('../../middlewares/validate');
 
 
@@ -17,5 +18,6 @@ router.get('/shifts', authenticate, validate(getAllShiftsQuerySchema), shiftCont
 router.post('/shifts/open', authenticate, validate(openShiftSchema), shiftController.openShift);
 router.get('/shifts/:id', authenticate, validate(getShiftByIdSchema), shiftController.getShiftById);
 router.post('/shifts/:id/close', authenticate, validate(closeShiftSchema), shiftController.closeShift);
+router.delete('/shifts/:id', authenticate, authorize('OWNER'), validate(deleteShiftSchema), shiftController.deleteShift);
 
 module.exports = router;

@@ -319,6 +319,11 @@ const getShopSettings = async (connection = pool) => {
     return rows[0] || { base_currency: 'USD', exchange_rate: 4100 };
 };
 
+const deleteExpenseById = async (id, connection = pool) => {
+    const [result] = await connection.query('DELETE FROM expenses WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+};
+
 module.exports = {
     insertExpense,
     findExpenseById,
@@ -327,5 +332,6 @@ module.exports = {
     updateExpenseById,
     voidExpenseById,
     getExpenseSummary,
-    getShopSettings
+    getShopSettings,
+    deleteExpenseById
 };

@@ -237,6 +237,68 @@ const countAllShifts = async ({ userId, status, startDate, endDate } = {}, conne
     return rows[0].total;
 };
 
+const deleteShiftById = async (shiftId) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        const [orderRows] = await connection.query(
+            'SELECT id FROM orders WHERE shift_id = ?',
+            [shiftId]
+        );
+        if (orderRows.length > 0) {
+            const orderIds = orderRows.map((o) => o.id);
+
+            // Reverse any net stock change caused by orders in this shift
+            const [stockRows] = await connection.query(
+                `SELECT ingredient_id, SUM(quantity_change) AS net_change
+                 FROM stock_movements
+                 WHERE order_id IN (?)
+                 GROUP BY ingredient_id`,
+                [orderIds]
+            );
+            for (const row of stockRows) {
+                const netChange = Number(row.net_change || 0);
+                if (netChange !== 0) {
+                    await connection.query(
+                        `UPDATE ingredients
+                         SET current_stock = GREATEST(0, current_stock - ?)
+                         WHERE id = ?`,
+                        [netChange, row.ingredient_id]
+                    );
+                }
+            }
+
+            await connection.query('DELETE FROM stock_movements WHERE order_id IN (?)', [orderIds]);
+            await connection.query(
+                `DELETE oia FROM order_item_addons oia
+                 JOIN order_items oi ON oi.id = oia.order_item_id
+                 WHERE oi.order_id IN (?)`,
+                [orderIds]
+            );
+            await connection.query('DELETE FROM order_items WHERE order_id IN (?)', [orderIds]);
+        }
+
+        await connection.query('DELETE FROM refunds WHERE shift_id = ?', [shiftId]);
+        await connection.query('DELETE FROM payments WHERE shift_id = ?', [shiftId]);
+        await connection.query('DELETE FROM orders WHERE shift_id = ?', [shiftId]);
+        await connection.query('DELETE FROM expenses WHERE shift_id = ?', [shiftId]);
+        const [result] = await connection.query('DELETE FROM shifts WHERE id = ?', [shiftId]);
+
+        await connection.commit();
+        return result.affectedRows > 0;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
+};
+
 module.exports = {
     findActiveShiftByUserId,
     findShiftById,
@@ -245,5 +307,6 @@ module.exports = {
     insertShift,
     closeShiftById,
     findAllShifts,
-    countAllShifts
+    countAllShifts,
+    deleteShiftById
 };

@@ -233,14 +233,8 @@ const updateIngredient = async ({ id, updateData, updaterId, ipAddress }) => {
         cleanUpdate.name = cleanName;
     }
 
-    // 3. Prevent unit modification if already referenced by recipes
+    // 3. Allow unit modification if provided
     if (updateData.unit !== undefined && updateData.unit !== existing.unit) {
-        const recipeCount = Number(existing.total_recipes || 0);
-        if (recipeCount > 0) {
-            throw ApiError.badRequest(
-                `Cannot change unit of ingredient '${existing.name}' from ${existing.unit} to ${updateData.unit} because it is used in ${recipeCount} recipe(s). Please update or remove the recipes first.`
-            );
-        }
         cleanUpdate.unit = updateData.unit;
     }
 
@@ -332,44 +326,58 @@ const deleteIngredient = async ({ id, deleterId, ipAddress }) => {
         throw ApiError.notFound('Ingredient not found');
     }
 
-    // 2. Check if ingredient is used in any recipes
     const recipeCount = await inventoryModel.countRecipesByIngredientId(id);
-    if (recipeCount > 0) {
-        throw ApiError.badRequest(
-            `Cannot delete ingredient '${ingredient.name}' because it is used in ${recipeCount} recipe(s). Please remove it from recipes first.`
-        );
-    }
-
-    // 3. Check if ingredient has stock movement history
     const movementCount = await inventoryModel.countStockMovementsByIngredientId(id);
-    if (movementCount > 0) {
-        throw ApiError.badRequest(
-            `Cannot delete ingredient '${ingredient.name}' because it has existing stock movement history. You can deactivate it (set is_active = false) instead.`
-        );
-    }
 
-    // 4. Delete ingredient
-    try {
-        await inventoryModel.deleteIngredientById(id);
-    } catch (error) {
-        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
-            throw ApiError.badRequest(`Cannot delete ingredient '${ingredient.name}' because it is referenced by other records.`);
-        }
-        throw error;
-    }
+    // 2. Delete ingredient along with its recipes and stock movements
+    await inventoryModel.deleteIngredientById(id);
 
-    // 5. Record audit log
+    // 3. Record audit log
     try {
         await auditLogsModel.insertAuditLog({
             userId: deleterId || null,
             action: 'DELETE_INGREDIENT',
             tableName: 'ingredients',
             recordId: id,
-            details: { name: ingredient.name, unit: ingredient.unit },
+            details: {
+                name: ingredient.name,
+                unit: ingredient.unit,
+                deleted_recipes_count: recipeCount,
+                deleted_movements_count: movementCount
+            },
             ipAddress
         });
     } catch (err) {
         console.error('Failed to write audit log for deleteIngredient:', err.message);
+    }
+
+    return true;
+};
+
+const deleteStockMovement = async ({ id, deleterId, ipAddress }) => {
+    const movement = await inventoryModel.findStockMovementById(id);
+    if (!movement) {
+        throw ApiError.notFound('Stock movement not found');
+    }
+
+    await inventoryModel.deleteStockMovementById(id);
+
+    try {
+        await auditLogsModel.insertAuditLog({
+            userId: deleterId || null,
+            action: 'DELETE_STOCK_MOVEMENT',
+            tableName: 'stock_movements',
+            recordId: id,
+            details: {
+                ingredient_id: movement.ingredient_id,
+                ingredient_name: movement.ingredient_name,
+                movement_type: movement.movement_type,
+                quantity_change: movement.quantity_change
+            },
+            ipAddress
+        });
+    } catch (err) {
+        console.error('Failed to write audit log for deleteStockMovement:', err.message);
     }
 
     return true;
@@ -752,6 +760,7 @@ module.exports = {
     createIngredient,
     updateIngredient,
     deleteIngredient,
+    deleteStockMovement,
     getStockMovements,
     getStockMovementById,
     createStockMovement,

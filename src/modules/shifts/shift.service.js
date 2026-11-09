@@ -361,10 +361,39 @@ const getAllShifts = async ({ user, queryParams = {} }) => {
     };
 };
 
+const deleteShift = async ({ shiftId, user, ipAddress }) => {
+    const shift = await shiftModel.findShiftById(shiftId);
+    if (!shift) {
+        throw ApiError.notFound('Shift not found');
+    }
+
+    await shiftModel.deleteShiftById(shiftId);
+
+    try {
+        await auditLogsModel.insertAuditLog({
+            userId: user?.id || null,
+            action: 'DELETE_SHIFT',
+            tableName: 'shifts',
+            recordId: shiftId,
+            details: {
+                shift_user_id: shift.user_id,
+                status: shift.status,
+                opened_at: shift.opened_at
+            },
+            ipAddress
+        });
+    } catch (err) {
+        console.error('Failed to write audit log for deleteShift:', err.message);
+    }
+
+    return true;
+};
+
 module.exports = {
     getCurrentShift,
     getShiftById,
     openShift,
     closeShift,
-    getAllShifts
+    getAllShifts,
+    deleteShift
 };

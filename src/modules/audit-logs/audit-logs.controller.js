@@ -27,7 +27,33 @@ const getAuditLogById = async (req, res, next) => {
     }
 };
 
+const deleteAuditLog = async (req, res, next) => {
+    try {
+        await auditLogsService.deleteAuditLog(req.params.id);
+        res.status(200).json({
+            success: true,
+            message: 'Audit log deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const clearAuditLogs = async (req, res, next) => {
+    try {
+        await auditLogsService.clearAuditLogs();
+        res.status(200).json({
+            success: true,
+            message: 'All audit logs cleared successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getAllAuditLogs,
-    getAuditLogById
+    getAuditLogById,
+    deleteAuditLog,
+    clearAuditLogs
 };

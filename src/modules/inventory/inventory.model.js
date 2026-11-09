@@ -271,12 +271,70 @@ const countStockMovementsByIngredientId = async (ingredientId, connection = pool
     return rows[0].total;
 };
 
-const deleteIngredientById = async (id, connection = pool) => {
-    const [result] = await connection.query(
-        'DELETE FROM ingredients WHERE id = ?',
-        [id]
-    );
-    return result.affectedRows;
+const deleteIngredientById = async (id) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        await connection.query('DELETE FROM recipes WHERE ingredient_id = ?', [id]);
+        await connection.query('DELETE FROM stock_movements WHERE ingredient_id = ?', [id]);
+        const [result] = await connection.query('DELETE FROM ingredients WHERE id = ?', [id]);
+
+        await connection.commit();
+        return result.affectedRows;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
+};
+
+const deleteStockMovementById = async (id) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        const [movRows] = await connection.query(
+            'SELECT id, ingredient_id, quantity_change FROM stock_movements WHERE id = ? LIMIT 1 FOR UPDATE',
+            [id]
+        );
+        if (movRows.length === 0) {
+            await connection.rollback();
+            return false;
+        }
+
+        const mov = movRows[0];
+        const qtyChange = Number(mov.quantity_change || 0);
+
+        // Reverse the stock movement impact on the ingredient's current_stock
+        if (qtyChange !== 0) {
+            await connection.query(
+                `UPDATE ingredients
+                 SET current_stock = GREATEST(0, current_stock - ?)
+                 WHERE id = ?`,
+                [qtyChange, mov.ingredient_id]
+            );
+        }
+
+        const [result] = await connection.query('DELETE FROM stock_movements WHERE id = ?', [id]);
+
+        await connection.commit();
+        return result.affectedRows > 0;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
 };
 
 const findStockMovements = async ({ ingredientId, movementType, orderId, createdBy, startDate, endDate, limit, offset } = {}) => {
@@ -624,6 +682,7 @@ module.exports = {
     countRecipesByIngredientId,
     countStockMovementsByIngredientId,
     deleteIngredientById,
+    deleteStockMovementById,
     findStockMovements,
     countStockMovements,
     insertStockMovement,

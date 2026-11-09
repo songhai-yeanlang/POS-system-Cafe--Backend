@@ -74,10 +74,13 @@ const getAllShiftsQuerySchema = {
     })
 };
 
+const deleteShiftSchema = getShiftByIdSchema;
+
 module.exports = {
     getCurrentShiftQuerySchema,
     openShiftSchema,
     getShiftByIdSchema,
     closeShiftSchema,
-    getAllShiftsQuerySchema
+    getAllShiftsQuerySchema,
+    deleteShiftSchema
 };

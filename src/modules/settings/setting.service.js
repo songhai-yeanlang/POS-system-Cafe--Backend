@@ -132,9 +132,62 @@ const deleteLogo = async ({ removerId, ipAddress }) => {
     return updatedSettings;
 };
 
+const clearData = async ({ targets, target, userId, ipAddress }) => {
+    let normalizedTargets = ['ALL'];
+
+    if (Array.isArray(targets) && targets.length > 0) {
+        normalizedTargets = targets.map((t) => String(t).trim().toUpperCase());
+    } else if (typeof targets === 'string' && targets.trim()) {
+        normalizedTargets = [targets.trim().toUpperCase()];
+    } else if (typeof target === 'string' && target.trim()) {
+        normalizedTargets = [target.trim().toUpperCase()];
+    }
+
+    const { clearedTables, removedProductImages } = await settingModel.clearSystemData(normalizedTargets);
+
+    // Clean up local product images from disk if products were cleared
+    if (Array.isArray(removedProductImages) && removedProductImages.length > 0) {
+        for (const imgPath of removedProductImages) {
+            if (typeof imgPath === 'string' && imgPath.startsWith('/uploads/')) {
+                const filePath = path.join(__dirname, '../../../', imgPath.replace(/^\/+/, ''));
+                if (fs.existsSync(filePath)) {
+                    try {
+                        fs.unlinkSync(filePath);
+                    } catch (err) {
+                        console.error('Failed to delete product image during clearData:', err.message);
+                    }
+                }
+            }
+        }
+    }
+
+    // Record audit log
+    try {
+        await auditLogsModel.insertAuditLog({
+            userId: userId || null,
+            action: 'CLEAR_SYSTEM_DATA',
+            tableName: 'settings',
+            recordId: 1,
+            details: {
+                targets: normalizedTargets,
+                cleared_tables: clearedTables
+            },
+            ipAddress
+        });
+    } catch (err) {
+        console.error('Failed to write audit log for clearData:', err.message);
+    }
+
+    return {
+        targets: normalizedTargets,
+        cleared_tables: clearedTables
+    };
+};
+
 module.exports = {
     getSettings,
     updateSettings,
     updateLogo,
-    deleteLogo
+    deleteLogo,
+    clearData
 };

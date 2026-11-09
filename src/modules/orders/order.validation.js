@@ -164,10 +164,13 @@ const cancelOrderSchema = {
     })
 };
 
+const deleteOrderSchema = getOrderByIdSchema;
+
 module.exports = {
     createOrderSchema,
     getOrderByIdSchema,
     getAllOrdersQuerySchema,
     updateOrderSchema,
-    cancelOrderSchema
+    cancelOrderSchema,
+    deleteOrderSchema
 };

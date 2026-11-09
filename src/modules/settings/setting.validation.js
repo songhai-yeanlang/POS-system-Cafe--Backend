@@ -31,6 +31,36 @@ const updateSettingsSchema = {
     })
 };
 
+const VALID_CLEAR_TARGETS = [
+    'ALL',
+    'ORDERS',
+    'SHIFTS',
+    'EXPENSES',
+    'INVENTORY',
+    'STOCK_MOVEMENTS',
+    'RECIPES',
+    'PRODUCTS',
+    'CATEGORIES',
+    'AUDIT_LOGS'
+];
+
+const clearDataSchema = {
+    body: Joi.object({
+        targets: Joi.alternatives().try(
+            Joi.array().items(Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)).min(1),
+            Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)
+        ).optional().messages({
+            'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`,
+            'array.min': 'At least one target must be specified'
+        }),
+        target: Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS).optional().messages({
+            'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`
+        })
+    }).optional()
+};
+
 module.exports = {
-    updateSettingsSchema
+    updateSettingsSchema,
+    clearDataSchema,
+    VALID_CLEAR_TARGETS
 };

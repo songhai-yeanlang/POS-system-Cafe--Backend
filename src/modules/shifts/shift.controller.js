@@ -103,10 +103,29 @@ const getAllShifts = async (req, res, next) => {
     }
 };
 
+const deleteShift = async (req, res, next) => {
+    try {
+        const ipAddress = req.ip || req.socket?.remoteAddress || null;
+        await shiftService.deleteShift({
+            shiftId: req.params.id,
+            user: req.user,
+            ipAddress
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Shift deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getCurrentShift,
     openShift,
     getShiftById,
     closeShift,
-    getAllShifts
+    getAllShifts,
+    deleteShift
 };

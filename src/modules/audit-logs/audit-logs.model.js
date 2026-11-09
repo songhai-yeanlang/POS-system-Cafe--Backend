@@ -114,9 +114,21 @@ const insertAuditLog = async ({ userId = null, action, tableName, recordId = nul
     return result.insertId;
 };
 
+const deleteAuditLogById = async (id) => {
+    const [result] = await pool.query('DELETE FROM audit_logs WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+};
+
+const clearAllAuditLogs = async () => {
+    await pool.query('TRUNCATE TABLE audit_logs');
+    return true;
+};
+
 module.exports = {
     findAuditLogs,
     countAuditLogs,
     findAuditLogById,
-    insertAuditLog
+    insertAuditLog,
+    deleteAuditLogById,
+    clearAllAuditLogs
 };

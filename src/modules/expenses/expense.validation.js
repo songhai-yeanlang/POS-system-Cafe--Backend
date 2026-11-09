@@ -125,11 +125,14 @@ const getExpenseSummaryQuerySchema = {
     })
 };
 
+const deleteExpenseSchema = getExpenseByIdSchema;
+
 module.exports = {
     createExpenseSchema,
     updateExpenseSchema,
     getExpenseByIdSchema,
     getExpensesQuerySchema,
     voidExpenseSchema,
-    getExpenseSummaryQuerySchema
+    getExpenseSummaryQuerySchema,
+    deleteExpenseSchema
 };

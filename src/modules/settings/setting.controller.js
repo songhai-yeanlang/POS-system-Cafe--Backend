@@ -81,10 +81,31 @@ const deleteLogo = async (req, res, next) => {
     }
 };
 
+const clearData = async (req, res, next) => {
+    try {
+        const ipAddress = req.ip || req.socket?.remoteAddress || null;
+        const result = await settingService.clearData({
+            targets: req.body?.targets || req.query?.targets,
+            target: req.body?.target || req.query?.target,
+            userId: req.user?.id,
+            ipAddress
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Selected system data cleared successfully',
+            data: result
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getSettings,
     updateSettings,
     uploadLogo,
-    deleteLogo
+    deleteLogo,
+    clearData
 };
 

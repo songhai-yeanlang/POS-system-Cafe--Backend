@@ -94,10 +94,29 @@ const cancelOrder = async (req, res, next) => {
     }
 };
 
+const deleteOrder = async (req, res, next) => {
+    try {
+        const ipAddress = req.ip || req.socket?.remoteAddress || null;
+        await orderService.deleteOrder({
+            orderId: req.params.id,
+            user: req.user,
+            ipAddress
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Order deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     createOrder,
     getOrderById,
     getAllOrders,
     updateOrder,
-    cancelOrder
+    cancelOrder,
+    deleteOrder
 };

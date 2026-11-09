@@ -137,8 +137,51 @@ const updateCategoryById = async (id, updateData = {}) => {
 };
 
 const deleteCategoryById = async (id) => {
-    const [result] = await pool.query('DELETE FROM categories WHERE id = ?', [id]);
-    return result.affectedRows > 0;
+    const connection = await pool.getConnection();
+    let removedImages = [];
+    try {
+        await connection.beginTransaction();
+        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        const [products] = await connection.query(
+            'SELECT id, image FROM products WHERE category_id = ?',
+            [id]
+        );
+        removedImages = products.map((p) => p.image).filter(Boolean);
+
+        if (products.length > 0) {
+            const productIds = products.map((p) => p.id);
+            await connection.query(
+                `DELETE r FROM recipes r
+                 JOIN product_variants pv ON pv.id = r.variant_id
+                 WHERE pv.product_id IN (?)`,
+                [productIds]
+            );
+            await connection.query(
+                'DELETE FROM product_variants WHERE product_id IN (?)',
+                [productIds]
+            );
+            await connection.query(
+                'DELETE FROM products WHERE category_id = ?',
+                [id]
+            );
+        }
+
+        const [result] = await connection.query('DELETE FROM categories WHERE id = ?', [id]);
+        await connection.commit();
+        return {
+            deleted: result.affectedRows > 0,
+            removedImages
+        };
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        connection.release();
+    }
 };
 
 // ==========================================
@@ -427,9 +470,21 @@ const updateVariantById = async (id, data = {}, connection = null) => {
 };
 
 const deleteVariantById = async (id, connection = null) => {
-    const db = connection || pool;
-    const [result] = await db.query(`DELETE FROM product_variants WHERE id = ?`, [id]);
-    return result.affectedRows;
+    const ownConnection = !connection;
+    const db = connection || (await pool.getConnection());
+    try {
+        await db.query('SET FOREIGN_KEY_CHECKS = 0');
+        await db.query('DELETE FROM recipes WHERE variant_id = ?', [id]);
+        const [result] = await db.query('DELETE FROM product_variants WHERE id = ?', [id]);
+        return result.affectedRows;
+    } finally {
+        try {
+            await db.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        if (ownConnection) {
+            db.release();
+        }
+    }
 };
 
 const isVariantUsedInOrders = async (variantId, connection = null) => {
@@ -444,9 +499,40 @@ const isVariantUsedInOrders = async (variantId, connection = null) => {
 };
 
 const deleteProductById = async (id, connection = null) => {
-    const db = connection || pool;
-    const [result] = await db.query('DELETE FROM products WHERE id = ?', [id]);
-    return result.affectedRows > 0;
+    const ownConnection = !connection;
+    const db = connection || (await pool.getConnection());
+    try {
+        if (ownConnection) {
+            await db.beginTransaction();
+        }
+        await db.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        await db.query(
+            `DELETE r FROM recipes r
+             JOIN product_variants pv ON pv.id = r.variant_id
+             WHERE pv.product_id = ?`,
+            [id]
+        );
+        await db.query('DELETE FROM product_variants WHERE product_id = ?', [id]);
+        const [result] = await db.query('DELETE FROM products WHERE id = ?', [id]);
+
+        if (ownConnection) {
+            await db.commit();
+        }
+        return result.affectedRows > 0;
+    } catch (error) {
+        if (ownConnection) {
+            await db.rollback();
+        }
+        throw error;
+    } finally {
+        try {
+            await db.query('SET FOREIGN_KEY_CHECKS = 1');
+        } catch (_) {}
+        if (ownConnection) {
+            db.release();
+        }
+    }
 };
 
 const isProductUsedInOrders = async (productId, connection = null) => {

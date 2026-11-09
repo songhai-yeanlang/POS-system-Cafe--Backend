@@ -7,9 +7,10 @@ const {
     getExpenseByIdSchema,
     getExpensesQuerySchema,
     voidExpenseSchema,
-    getExpenseSummaryQuerySchema
+    getExpenseSummaryQuerySchema,
+    deleteExpenseSchema
 } = require('./expense.validation');
-const { authenticate } = require('../../middlewares/authenticate');
+const { authenticate, authorize } = require('../../middlewares/authenticate');
 const validate = require('../../middlewares/validate');
 
 
@@ -20,5 +21,6 @@ router.get('/expenses/categories', authenticate, expensesController.getCategorie
 router.get('/expenses/:id', authenticate, validate(getExpenseByIdSchema), expensesController.getExpenseById);
 router.put('/expenses/:id', authenticate, validate(updateExpenseSchema), expensesController.updateExpense);
 router.post('/expenses/:id/void', authenticate, validate(voidExpenseSchema), expensesController.voidExpense);
+router.delete('/expenses/:id', authenticate, authorize('OWNER'), validate(deleteExpenseSchema), expensesController.deleteExpense);
 
 module.exports = router;

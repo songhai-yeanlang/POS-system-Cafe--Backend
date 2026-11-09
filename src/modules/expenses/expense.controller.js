@@ -121,6 +121,24 @@ const getCategories = async (req, res, next) => {
     }
 };
 
+const deleteExpense = async (req, res, next) => {
+    try {
+        const ipAddress = req.ip || req.socket?.remoteAddress || null;
+        await expensesService.deleteExpense({
+            id: req.params.id,
+            user: req.user,
+            ipAddress
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Expense deleted successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     createExpense,
     getExpenseById,
@@ -128,5 +146,6 @@ module.exports = {
     updateExpense,
     voidExpense,
     getExpenseSummary,
-    getCategories
+    getCategories,
+    deleteExpense
 };

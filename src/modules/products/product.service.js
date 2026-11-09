@@ -118,24 +118,25 @@ const deleteCategory = async ({ id, deleterId, ipAddress }) => {
         throw ApiError.notFound('Category not found');
     }
 
-    // 2. Check if category is currently used by any products
     const productCount = await productModel.countProductsByCategoryId(id);
-    if (productCount > 0) {
-        throw ApiError.badRequest(
-            `Cannot delete category because it has ${productCount} assigned product(s). Please reassign or delete the products first, or deactivate the category.`
-        );
-    }
 
-    // 3. Delete category from database
-    try {
-        await productModel.deleteCategoryById(id);
-    } catch (error) {
-        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
-            throw ApiError.badRequest(
-                `Cannot delete category '${category.name}' because it is referenced by existing products.`
-            );
+    // 2. Delete category (and any assigned products, variants, recipes) from database
+    const { removedImages } = await productModel.deleteCategoryById(id);
+
+    // 3. Remove product image files from disk if any products had local images
+    if (Array.isArray(removedImages) && removedImages.length > 0) {
+        for (const imgPath of removedImages) {
+            if (typeof imgPath === 'string' && imgPath.startsWith('/uploads/')) {
+                const filePath = path.join(__dirname, '../../../', imgPath.replace(/^\/+/, ''));
+                if (fs.existsSync(filePath)) {
+                    try {
+                        fs.unlinkSync(filePath);
+                    } catch (err) {
+                        console.error('Failed to delete product image file during deleteCategory:', err.message);
+                    }
+                }
+            }
         }
-        throw error;
     }
 
     // 4. Record audit log
@@ -145,7 +146,11 @@ const deleteCategory = async ({ id, deleterId, ipAddress }) => {
             action: 'DELETE_CATEGORY',
             tableName: 'categories',
             recordId: id,
-            details: { name: category.name, sort_order: category.sort_order },
+            details: {
+                name: category.name,
+                sort_order: category.sort_order,
+                deleted_products_count: productCount
+            },
             ipAddress
         });
     } catch (err) {
@@ -428,14 +433,7 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
             // Check variants that were in DB but not present in updateData.variants
             for (const existingV of existingVariants) {
                 if (!updatedVariantIds.has(existingV.id)) {
-                    const isUsed = await productModel.isVariantUsedInOrders(existingV.id, connection);
-                    if (isUsed) {
-                        // Deactivate to protect order history foreign keys
-                        await productModel.updateVariantById(existingV.id, { is_active: false }, connection);
-                    } else {
-                        // Safe to delete if never used in any order
-                        await productModel.deleteVariantById(existingV.id, connection);
-                    }
+                    await productModel.deleteVariantById(existingV.id, connection);
                 }
             }
         }
@@ -479,27 +477,10 @@ const deleteProduct = async ({ id, deleterId, ipAddress }) => {
         throw ApiError.notFound('Product not found');
     }
 
-    // 2. Check if product or its variants have been used in orders
-    const isUsed = await productModel.isProductUsedInOrders(id);
-    if (isUsed) {
-        throw ApiError.badRequest(
-            'Cannot delete product because it has historical sales/order records. Please deactivate the product (is_active = false) instead.'
-        );
-    }
+    // 2. Delete product, its variants, and its recipes from database
+    await productModel.deleteProductById(id);
 
-    // 3. Delete product from database (cascade deletes product_variants and recipes)
-    try {
-        await productModel.deleteProductById(id);
-    } catch (error) {
-        if (error.errno === 1451 || error.code === 'ER_ROW_IS_REFERENCED_2') {
-            throw ApiError.badRequest(
-                `Cannot delete product '${product.name}' because it is referenced by existing order or stock records.`
-            );
-        }
-        throw error;
-    }
-
-    // 4. Remove image file from disk if stored locally
+    // 3. Remove image file from disk if stored locally
     if (product.image && typeof product.image === 'string' && product.image.startsWith('/uploads/')) {
         const filePath = path.join(__dirname, '../../../', product.image.replace(/^\/+/, ''));
         if (fs.existsSync(filePath)) {
@@ -511,7 +492,7 @@ const deleteProduct = async ({ id, deleterId, ipAddress }) => {
         }
     }
 
-    // 5. Record audit log
+    // 4. Record audit log
     try {
         await auditLogsModel.insertAuditLog({
             userId: deleterId || null,

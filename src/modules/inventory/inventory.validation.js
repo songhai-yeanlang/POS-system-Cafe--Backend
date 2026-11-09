@@ -144,6 +144,8 @@ const getStockMovementByIdSchema = {
     })
 };
 
+const deleteStockMovementSchema = getStockMovementByIdSchema;
+
 const getRecipeByVariantIdSchema = {
     params: Joi.object({
         variantId: Joi.number().integer().positive().required().messages({
@@ -218,6 +220,7 @@ module.exports = {
     updateIngredientSchema,
     getStockMovementsQuerySchema,
     getStockMovementByIdSchema,
+    deleteStockMovementSchema,
     createStockMovementSchema,
     getRecipeByVariantIdSchema,
     deleteRecipeByVariantIdSchema,
