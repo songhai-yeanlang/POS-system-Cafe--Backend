@@ -12,49 +12,69 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+const escapeHtml = (value) =>
+    String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
 const sendResetPasswordOtp = async ({ to, name, otp }) => {
+    const safeName = escapeHtml(name || 'User');
+    const safeOtp = escapeHtml(otp);
+
     const htmlContent = `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <meta charset="utf-8">
-        <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f6f9fc; margin: 0; padding: 20px; }
-            .container { max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-            .header { background: #3c2a21; padding: 24px; text-align: center; color: #ffffff; }
-            .header h1 { margin: 0; font-size: 24px; letter-spacing: 1px; }
-            .content { padding: 32px 24px; color: #333333; line-height: 1.6; }
-            .otp-box { background: #fdf8f5; border: 2px dashed #b85d19; border-radius: 8px; text-align: center; padding: 18px; margin: 24px 0; }
-            .otp-code { font-size: 36px; font-weight: 700; color: #b85d19; letter-spacing: 8px; font-family: monospace; }
-            .footer { background: #f8fafc; padding: 18px 24px; text-align: center; font-size: 13px; color: #888888; border-top: 1px solid #edf2f7; }
-        </style>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Password Reset Code</title>
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>☕ POS Coffee System</h1>
-            </div>
-            <div class="content">
-                <p>Hello <strong>${name || 'User'}</strong>,</p>
-                <p>We received a request to reset your password for your <strong>POS Coffee</strong> account.</p>
-                <p>Use the following 6-digit verification code (OTP) to proceed with resetting your password:</p>
-                <div class="otp-box">
-                    <div class="otp-code">${otp}</div>
-                </div>
-                <p style="color: #666; font-size: 14px;">⏳ This code is valid for <strong>10 minutes</strong>. For your security, do not share this code with anyone.</p>
-                <p style="color: #999; font-size: 13px;">If you did not request a password reset, you can safely ignore this email. Your account remains secure.</p>
-            </div>
-            <div class="footer">
-                &copy; ${new Date().getFullYear()} POS Coffee Shop System. All rights reserved.
-            </div>
+    <body style="margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #14231a; -webkit-font-smoothing: antialiased;">
+        <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+            Your POS Coffee verification code is ${safeOtp}. Valid for 10 minutes.
         </div>
+
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #ffffff; width: 100%;">
+            <tr>
+                <td align="center" style="padding: 32px 16px;">
+                    <table role="presentation" width="440" cellspacing="0" cellpadding="0" border="0" style="width: 100%; max-width: 440px; background-color: #ffffff; border: 1px solid #e6ebe8; border-radius: 12px;">
+                        <tr>
+                            <td style="padding: 32px;">
+                                <div style="font-size: 13px; font-weight: 600; color: #2d5a43; margin-bottom: 18px;">
+                                    POS System
+                                </div>
+
+                                <h1 style="margin: 0 0 10px; font-size: 20px; font-weight: 700; color: #14231a; line-height: 1.3; letter-spacing: -0.02em;">
+                                    Password reset code
+                                </h1>
+
+                                <p style="margin: 0 0 24px; font-size: 14px; line-height: 1.6; color: #4a5950;">
+                                    Hi <strong style="color: #14231a; font-weight: 600;">${safeName}</strong>, enter this code to reset your password. It expires in 10 minutes.
+                                </p>
+
+                                <div style="background-color: #f6f9f7; border: 1px solid #e0e8e3; border-radius: 8px; padding: 18px 16px; text-align: center; margin-bottom: 22px;">
+                                    <span style="display: inline-block; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 30px; font-weight: 700; color: #14231a; letter-spacing: 10px; padding-left: 10px; line-height: 1.2; font-variant-numeric: tabular-nums;">${safeOtp}</span>
+                                </div>
+
+                                <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #78857d;">
+                                    If you didn't request a password reset, you can ignore this email.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
     </body>
     </html>
     `;
 
     try {
         const info = await transporter.sendMail({
-            from: `"POS Coffee System" <${env.mail.user}>`,
+            from: `"YL Web Solutions" <${env.mail.user}>`,
             to,
             subject: `[POS Coffee] ${otp} is your Password Reset Verification Code`,
             text: `Your password reset OTP code is: ${otp}. It is valid for 10 minutes.`,
