@@ -353,6 +353,10 @@ const getCategories = () => {
 };
 
 const deleteExpense = async ({ id, user, ipAddress }) => {
+    if (!user || user.role !== 'OWNER') {
+        throw ApiError.forbidden('Only OWNER is allowed to permanently delete expenses');
+    }
+
     const existing = await expensesModel.findExpenseById(id);
     if (!existing) {
         throw ApiError.notFound(`Expense #${id} not found`);
