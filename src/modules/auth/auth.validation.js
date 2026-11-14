@@ -101,10 +101,9 @@ const resetPasswordSchema = {
             'string.min': 'New password must be at least 6 characters',
             'any.required': 'New password is required'
         }),
-        confirmPassword: Joi.string().valid(Joi.ref('newPassword')).required().messages({
+        confirmPassword: Joi.string().valid(Joi.ref('newPassword')).optional().messages({
             'string.empty': 'Confirm password is required',
-            'any.only': 'Confirm password must match new password',
-            'any.required': 'Confirm password is required'
+            'any.only': 'Confirm password must match new password'
         })
     })
 };
