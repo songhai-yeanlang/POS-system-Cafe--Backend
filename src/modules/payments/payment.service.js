@@ -462,25 +462,37 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
 
     // 4. Validate Approver
     let approverId = null;
+    const providedPassword = refundData.approver_password || refundData.owner_password;
+
     if (user.role === 'OWNER') {
         approverId = refundData.approved_by ? Number(refundData.approved_by) : user.id;
+        const approverUser = await paymentModel.findActiveOwnerById(approverId);
+        if (!approverUser) {
+            throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
+        }
+    } else if (providedPassword) {
+        // Staff provided an OWNER password: find matching active OWNER automatically
+        const activeOwners = await paymentModel.findAllActiveOwners();
+        let matchedOwner = null;
+        for (const owner of activeOwners) {
+            const isMatch = await bcrypt.compare(String(providedPassword), owner.password_hash);
+            if (isMatch) {
+                matchedOwner = owner;
+                break;
+            }
+        }
+        if (!matchedOwner) {
+            throw ApiError.forbidden('Invalid OWNER approval password for refund');
+        }
+        approverId = matchedOwner.id;
     } else {
         if (!refundData.approved_by) {
-            throw ApiError.forbidden('Staff members require approval from an active OWNER to process a refund. Please provide approved_by.');
+            throw ApiError.forbidden('Staff members require approval from an active OWNER to process a refund. Please provide owner_password or approved_by.');
         }
         approverId = Number(refundData.approved_by);
-    }
-
-    const approverUser = await paymentModel.findActiveOwnerById(approverId);
-    if (!approverUser) {
-        throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
-    }
-
-    const providedPassword = refundData.approver_password || refundData.owner_password;
-    if (providedPassword && user.role !== 'OWNER') {
-        const isValidApproverPass = await bcrypt.compare(String(providedPassword), approverUser.password_hash);
-        if (!isValidApproverPass) {
-            throw ApiError.forbidden('Invalid OWNER approval password for refund');
+        const approverUser = await paymentModel.findActiveOwnerById(approverId);
+        if (!approverUser) {
+            throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
         }
     }
 

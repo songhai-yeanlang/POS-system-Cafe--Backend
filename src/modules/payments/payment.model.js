@@ -762,6 +762,16 @@ const findActiveOwnerById = async (userId, connection = pool) => {
     };
 };
 
+const findAllActiveOwners = async (connection = pool) => {
+    const [rows] = await connection.query(
+        `SELECT id, name, role, is_active, password_hash FROM users WHERE role = 'OWNER' AND is_active = TRUE ORDER BY id ASC`
+    );
+    return rows.map((r) => ({
+        ...r,
+        is_active: Boolean(r.is_active)
+    }));
+};
+
 module.exports = {
     findPaymentById,
     findPaymentByOrderId,
@@ -786,5 +796,6 @@ module.exports = {
     getSaleStockMovementsForOrder,
     insertReturnStockMovement,
     restoreIngredientStock,
-    findActiveOwnerById
+    findActiveOwnerById,
+    findAllActiveOwners
 };
