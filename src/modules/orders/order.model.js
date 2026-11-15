@@ -72,6 +72,16 @@ const findUserRoleById = async (userId, connection = pool) => {
     };
 };
 
+const findAllActiveOwners = async (connection = pool) => {
+    const [rows] = await connection.query(
+        `SELECT id, name, role, is_active, password_hash FROM users WHERE role = 'OWNER' AND is_active = TRUE ORDER BY id ASC`
+    );
+    return rows.map((r) => ({
+        ...r,
+        is_active: Boolean(r.is_active)
+    }));
+};
+
 const insertOrder = async ({
     receiptNo,
     queueNo,
@@ -347,8 +357,11 @@ const findOrderById = async (orderId, connection = pool) => {
         `SELECT 
             p.id,
             p.method,
+            p.bank_name,
             p.currency,
             CAST(p.amount AS DOUBLE) AS amount,
+            CAST(p.exchange_rate AS DOUBLE) AS exchange_rate,
+            CAST(p.khr_per_usd AS DOUBLE) AS khr_per_usd,
             CAST(p.amount_usd AS DOUBLE) AS amount_usd,
             CAST(p.received_amount AS DOUBLE) AS received_amount,
             CAST(p.change_usd AS DOUBLE) AS change_usd,
@@ -410,6 +423,7 @@ const findOrderById = async (orderId, connection = pool) => {
             name: order.cancelled_by_name
         } : null,
         cancellation_reason: order.cancellation_reason,
+        exchange_rate: paymentRows.length > 0 ? paymentRows[paymentRows.length - 1].khr_per_usd : null,
         items,
         payments: paymentRows,
         created_at: order.created_at,
@@ -447,6 +461,7 @@ const findAllOrders = async ({
             CAST(o.total AS DOUBLE) AS total,
             o.note,
             (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) AS total_items,
+            (SELECT CAST(khr_per_usd AS DOUBLE) FROM payments WHERE order_id = o.id ORDER BY id DESC LIMIT 1) AS exchange_rate,
             o.paid_at,
             o.cancelled_at,
             o.created_at,
@@ -611,6 +626,7 @@ module.exports = {
     getNextQueueNo,
     getVariantsDetailsByIds,
     findUserRoleById,
+    findAllActiveOwners,
     insertOrder,
     updateOrderById,
     deleteOrderItemsByOrderId,

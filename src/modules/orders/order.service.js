@@ -109,29 +109,44 @@ const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = n
     let discountReason = null;
 
     if (discountType !== 'NONE' && discountValue > 0) {
-        // If current user is OWNER, they can auto-approve the discount if not explicitly specified
-        let approverId = orderData.discount_approved_by;
-        if (!approverId && currentUser && currentUser.role === 'OWNER') {
-            approverId = currentUser.id;
-        }
-
-        if (!approverId) {
-            throw ApiError.badRequest('Discounts must be approved by an authorized OWNER. Please provide discount_approved_by');
-        }
         if (!orderData.discount_reason || !orderData.discount_reason.trim()) {
             throw ApiError.badRequest('Discount reason is required when applying a discount');
         }
 
-        const approver = await orderModel.findUserRoleById(approverId);
-        if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
-            throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
-        }
-
+        // If current user is OWNER, they can auto-approve the discount if not explicitly specified
+        let approverId = orderData.discount_approved_by;
         const providedPassword = orderData.approver_password || orderData.owner_password;
-        if (providedPassword && (!currentUser || currentUser.role !== 'OWNER')) {
-            const isValidApproverPass = await bcrypt.compare(String(providedPassword), approver.password_hash);
-            if (!isValidApproverPass) {
+
+        if (currentUser && currentUser.role === 'OWNER') {
+            if (!approverId) {
+                approverId = currentUser.id;
+            }
+            const approver = await orderModel.findUserRoleById(approverId);
+            if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
+                throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
+            }
+        } else if (providedPassword) {
+            // Staff provided an OWNER password: find matching active OWNER automatically
+            const activeOwners = await orderModel.findAllActiveOwners();
+            let matchedOwner = null;
+            for (const owner of activeOwners) {
+                const isMatch = await bcrypt.compare(String(providedPassword), owner.password_hash);
+                if (isMatch) {
+                    matchedOwner = owner;
+                    break;
+                }
+            }
+            if (!matchedOwner) {
                 throw ApiError.forbidden('Invalid OWNER approval password for discount');
+            }
+            approverId = matchedOwner.id;
+        } else {
+            if (!approverId) {
+                throw ApiError.badRequest('Discounts must be approved by an authorized OWNER. Please provide owner_password or discount_approved_by');
+            }
+            const approver = await orderModel.findUserRoleById(approverId);
+            if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
+                throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
             }
         }
 
@@ -350,6 +365,7 @@ const getAllOrders = async ({ queryParams = {} }) => {
             amount: o.discount_amount
         },
         total: o.total,
+        exchange_rate: o.exchange_rate || null,
         total_items: Number(o.total_items || 0),
         note: o.note,
         paid_at: o.paid_at,
