@@ -15,6 +15,19 @@ const DEFAULT_EXPENSE_CATEGORIES = [
     'OTHER'
 ];
 
+const normalizeIncurredAt = (val) => {
+    if (!val) return null;
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (!trimmed) return null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            return trimmed;
+        }
+    }
+    const parsed = new Date(val);
+    return isNaN(parsed.getTime()) ? val : parsed;
+};
+
 const createExpense = async ({ user, expenseData, ipAddress }) => {
     const paymentMethod = expenseData.payment_method;
     const currency = expenseData.currency || 'USD';
@@ -78,7 +91,7 @@ const createExpense = async ({ user, expenseData, ipAddress }) => {
         amount,
         exchangeRate,
         createdBy: user.id,
-        incurredAt: expenseData.incurred_at || null
+        incurredAt: normalizeIncurredAt(expenseData.incurred_at)
     });
 
     // 4. Audit Log
@@ -152,10 +165,13 @@ const getAllExpenses = async ({ queryParams = {} }) => {
     return {
         expenses,
         pagination: {
+            page,
+            limit,
+            total: totalItems,
+            totalPages,
             total_items: totalItems,
             total_pages: totalPages,
-            current_page: page,
-            limit
+            current_page: page
         }
     };
 };
@@ -192,7 +208,7 @@ const updateExpense = async ({ id, user, updateData, ipAddress }) => {
         fieldsToUpdate.description = updateData.description.trim();
     }
     if (updateData.incurred_at !== undefined) {
-        fieldsToUpdate.incurredAt = updateData.incurred_at;
+        fieldsToUpdate.incurredAt = normalizeIncurredAt(updateData.incurred_at);
     }
 
     const nextPaymentMethod = updateData.payment_method || existing.payment_method;
@@ -200,12 +216,19 @@ const updateExpense = async ({ id, user, updateData, ipAddress }) => {
 
     if (updateData.payment_method !== undefined) {
         fieldsToUpdate.paymentMethod = updateData.payment_method;
-        if (nextPaymentMethod === 'CASH' && !existing.shift_id) {
-            const activeShift = await shiftModel.findActiveShiftByUserId(user.id);
-            if (!activeShift) {
-                throw ApiError.badRequest('Changing to CASH requires an active open shift');
+        if (nextPaymentMethod === 'CASH') {
+            if (existing.shift_id) {
+                const existingShift = await shiftModel.findShiftById(existing.shift_id);
+                if (existingShift && existingShift.status === 'CLOSED' && existing.payment_method !== 'CASH') {
+                    throw ApiError.badRequest('Cannot change payment method to CASH on an expense belonging to a closed shift');
+                }
+            } else {
+                const activeShift = await shiftModel.findActiveShiftByUserId(user.id);
+                if (!activeShift) {
+                    throw ApiError.badRequest('Changing to CASH requires an active open shift');
+                }
+                fieldsToUpdate.shiftId = activeShift.id;
             }
-            fieldsToUpdate.shiftId = activeShift.id;
         }
     }
 
@@ -224,6 +247,11 @@ const updateExpense = async ({ id, user, updateData, ipAddress }) => {
     }
 
     await expensesModel.updateExpenseById(id, fieldsToUpdate);
+
+    // Keep closed shift expected cash drawer synchronized if an OWNER updated a shift-linked expense
+    if (existing.shift_id) {
+        await shiftModel.syncClosedShiftExpectedCash(existing.shift_id);
+    }
 
     // Audit Log
     try {
@@ -275,6 +303,10 @@ const voidExpense = async ({ id, user, voidReason, ipAddress }) => {
         voidedBy: user.id,
         voidReason: cleanReason
     });
+
+    if (existing.shift_id) {
+        await shiftModel.syncClosedShiftExpectedCash(existing.shift_id);
+    }
 
     // Audit Log
     try {
@@ -363,6 +395,10 @@ const deleteExpense = async ({ id, user, ipAddress }) => {
     }
 
     await expensesModel.deleteExpenseById(id);
+
+    if (existing.shift_id) {
+        await shiftModel.syncClosedShiftExpectedCash(existing.shift_id);
+    }
 
     try {
         await auditLogsModel.insertAuditLog({

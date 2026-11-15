@@ -98,14 +98,13 @@ const loginUser = async ({ email, password, userAgent, ipAddress }) => {
     // 6. Generate and save refresh token
     const rawRefreshToken = generateRefreshTokenString();
     const tokenHash = hashToken(rawRefreshToken);
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
     await authModel.saveRefreshToken({
         userId: user.id,
         tokenHash,
         userAgent: userAgent || null,
         ipAddress: ipAddress || null,
-        expiresAt
+        expiryDays: REFRESH_TOKEN_EXPIRY_DAYS
     });
 
     // 7. Audit log: record successful login
@@ -164,8 +163,11 @@ const refreshAccessToken = async ({ refreshToken, userAgent, ipAddress }) => {
         throw ApiError.unauthorized('Suspicious activity detected: Revoked token was reused. All active sessions have been terminated for security.');
     }
 
-    // 3. Verify token has not expired
-    if (new Date(tokenRecord.expires_at) <= new Date()) {
+    // 3. Verify token has not expired (using DB clock evaluation)
+    const isExpired = tokenRecord.is_expired !== undefined
+        ? Boolean(tokenRecord.is_expired)
+        : new Date(tokenRecord.expires_at) <= new Date();
+    if (isExpired) {
         throw ApiError.unauthorized('Refresh token has expired');
     }
 
@@ -185,14 +187,13 @@ const refreshAccessToken = async ({ refreshToken, userAgent, ipAddress }) => {
     // 6. Generate new refresh token
     const newRawRefreshToken = generateRefreshTokenString();
     const newTokenHash = hashToken(newRawRefreshToken);
-    const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
     await authModel.saveRefreshToken({
         userId: user.id,
         tokenHash: newTokenHash,
         userAgent: userAgent || tokenRecord.user_agent,
         ipAddress: ipAddress || tokenRecord.ip_address,
-        expiresAt: newExpiresAt
+        expiryDays: REFRESH_TOKEN_EXPIRY_DAYS
     });
 
     // 7. Generate new access token
@@ -345,11 +346,13 @@ const forgotPassword = async ({ email, ipAddress }) => {
 
     // 3. Cooldown protection: Check if user requested an OTP less than 60 seconds ago
     const activeReset = await authModel.findActiveResetByEmail(email);
-    if (activeReset && activeReset.created_at) {
-        const timeDiff = Date.now() - new Date(activeReset.created_at).getTime();
-        const cooldownMs = 60 * 1000; // 60 seconds
-        if (timeDiff < cooldownMs) {
-            const secondsLeft = Math.ceil((cooldownMs - timeDiff) / 1000);
+    if (activeReset) {
+        const elapsedSeconds = activeReset.seconds_since_created !== undefined && activeReset.seconds_since_created !== null
+            ? Number(activeReset.seconds_since_created)
+            : Math.floor((Date.now() - new Date(activeReset.created_at).getTime()) / 1000);
+        const cooldownSeconds = 60;
+        if (elapsedSeconds < cooldownSeconds) {
+            const secondsLeft = Math.max(1, cooldownSeconds - elapsedSeconds);
             throw ApiError.badRequest(`Please wait ${secondsLeft} seconds before requesting a new OTP.`);
         }
     }
@@ -364,15 +367,12 @@ const forgotPassword = async ({ email, ipAddress }) => {
     const salt = await bcrypt.genSalt(10);
     const otpHash = await bcrypt.hash(otp, salt);
 
-    // 6. Set expiration time to 10 minutes
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-    // 7. Save to database
+    // 6. Save to database with 10-minute expiration computed on DB clock
     await authModel.createPasswordReset({
         userId: user.id,
         email: user.email,
         otpHash,
-        expiresAt
+        expiryMinutes: 10
     });
 
     // 8. Send OTP to user's email

@@ -27,7 +27,7 @@ const createExpenseSchema = {
             'number.base': 'Amount must be a number',
             'number.positive': 'Amount must be greater than 0'
         }),
-        incurred_at: Joi.string().isoDate().allow(null, '').optional().messages({
+        incurred_at: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Incurred date must be a valid ISO date'
         })
     })
@@ -59,7 +59,7 @@ const updateExpenseSchema = {
             'number.base': 'Amount must be a number',
             'number.positive': 'Amount must be greater than 0'
         }),
-        incurred_at: Joi.string().isoDate().allow(null, '').optional().messages({
+        incurred_at: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Incurred date must be a valid ISO date'
         })
     }).min(1).messages({
@@ -86,10 +86,10 @@ const getExpensesQuerySchema = {
         currency: Joi.string().valid('USD', 'KHR').optional(),
         status: Joi.string().valid('ACTIVE', 'VOIDED').optional(),
         created_by: Joi.number().integer().positive().optional(),
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         search: Joi.string().trim().max(100).allow(null, '').optional()
@@ -115,10 +115,10 @@ const voidExpenseSchema = {
 
 const getExpenseSummaryQuerySchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         shift_id: Joi.number().integer().positive().optional()

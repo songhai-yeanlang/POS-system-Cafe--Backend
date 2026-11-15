@@ -62,10 +62,14 @@ const getVariantsDetailsByIds = async (variantIds = [], connection = pool) => {
 
 const findUserRoleById = async (userId, connection = pool) => {
     const [rows] = await connection.query(
-        `SELECT id, name, role, is_active FROM users WHERE id = ? LIMIT 1`,
+        `SELECT id, name, role, is_active, password_hash FROM users WHERE id = ? LIMIT 1`,
         [userId]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const insertOrder = async ({
@@ -576,6 +580,7 @@ const deleteOrderById = async (orderId) => {
             }
         }
 
+        await connection.query(`DELETE FROM stock_movements WHERE order_id = ? AND movement_type = 'RETURN'`, [orderId]);
         await connection.query('DELETE FROM stock_movements WHERE order_id = ?', [orderId]);
         await connection.query('DELETE FROM refunds WHERE order_id = ?', [orderId]);
         await connection.query('DELETE FROM payments WHERE order_id = ?', [orderId]);

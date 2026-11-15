@@ -5,7 +5,11 @@ const findUserByEmail = async (email) => {
         'SELECT id, name, email, password_hash, role, is_active FROM users WHERE email = ? LIMIT 1',
         [email]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const updateLastLogin = async (userId) => {
@@ -20,7 +24,11 @@ const findUserById = async (id) => {
         'SELECT id, name, email, role, is_active, last_login_at, created_at FROM users WHERE id = ? LIMIT 1',
         [id]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const findUserByIdWithPassword = async (id) => {
@@ -28,7 +36,11 @@ const findUserByIdWithPassword = async (id) => {
         'SELECT id, name, email, password_hash, role, is_active FROM users WHERE id = ? LIMIT 1',
         [id]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const updateProfile = async (userId, { name }) => {
@@ -45,18 +57,19 @@ const updatePassword = async (userId, newPasswordHash) => {
     );
 };
 
-const saveRefreshToken = async ({ userId, tokenHash, userAgent, ipAddress, expiresAt }) => {
+const saveRefreshToken = async ({ userId, tokenHash, userAgent, ipAddress, expiryDays = 7 }) => {
     const [result] = await pool.query(
         `INSERT INTO refresh_tokens (user_id, token_hash, user_agent, ip_address, expires_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [userId, tokenHash, userAgent, ipAddress, expiresAt]
+         VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))`,
+        [userId, tokenHash, userAgent, ipAddress, Number(expiryDays) || 7]
     );
     return result.insertId;
 };
 
 const findRefreshToken = async (tokenHash) => {
     const [rows] = await pool.query(
-        `SELECT id, user_id, token_hash, user_agent, ip_address, expires_at, revoked_at, created_at
+        `SELECT id, user_id, token_hash, user_agent, ip_address, expires_at, revoked_at, created_at,
+                (expires_at <= NOW()) AS is_expired
          FROM refresh_tokens
          WHERE token_hash = ?
          LIMIT 1`,
@@ -95,18 +108,19 @@ const invalidatePreviousResets = async (userId) => {
     );
 };
 
-const createPasswordReset = async ({ userId, email, otpHash, expiresAt }) => {
+const createPasswordReset = async ({ userId, email, otpHash, expiryMinutes = 10 }) => {
     const [result] = await pool.query(
         `INSERT INTO password_resets (user_id, email, otp_hash, expires_at)
-         VALUES (?, ?, ?, ?)`,
-        [userId, email, otpHash, expiresAt]
+         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
+        [userId, email, otpHash, Number(expiryMinutes) || 10]
     );
     return result.insertId;
 };
 
 const findActiveResetByEmail = async (email) => {
     const [rows] = await pool.query(
-        `SELECT id, user_id, email, otp_hash, reset_token, attempts, expires_at, is_used, created_at
+        `SELECT id, user_id, email, otp_hash, reset_token, attempts, expires_at, is_used, created_at,
+                TIMESTAMPDIFF(SECOND, created_at, NOW()) AS seconds_since_created
          FROM password_resets
          WHERE email = ? AND is_used = FALSE AND expires_at > NOW()
          ORDER BY id DESC

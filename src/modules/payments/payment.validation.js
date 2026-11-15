@@ -17,14 +17,9 @@ const processPaymentSchema = {
         currency: Joi.string().valid('USD', 'KHR').default('USD').messages({
             'any.only': 'Currency must be either USD or KHR'
         }),
-        received_amount: Joi.number().min(0).when('method', {
-            is: 'CASH',
-            then: Joi.required().messages({
-                'any.required': 'Received amount is required for CASH payment',
-                'number.base': 'Received amount must be a number',
-                'number.min': 'Received amount cannot be negative'
-            }),
-            otherwise: Joi.optional()
+        received_amount: Joi.number().min(0).optional().messages({
+            'number.base': 'Received amount must be a number',
+            'number.min': 'Received amount cannot be negative'
         }),
         change_currency: Joi.string().valid('USD', 'KHR').optional().messages({
             'any.only': 'Change currency must be either USD or KHR'
@@ -54,10 +49,10 @@ const getPaymentsQuerySchema = {
         currency: Joi.string().valid('USD', 'KHR').optional(),
         status: Joi.string().valid('PENDING', 'COMPLETED', 'FAILED', 'CANCELLED').optional(),
         received_by: Joi.number().integer().positive().optional(),
-        start_date: Joi.string().isoDate().optional().messages({
+        start_date: Joi.string().isoDate().raw().optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date string'
         }),
-        end_date: Joi.string().isoDate().optional().messages({
+        end_date: Joi.string().isoDate().raw().optional().messages({
             'string.isoDate': 'End date must be a valid ISO date string'
         }),
         search: Joi.string().trim().max(100).optional()
@@ -97,6 +92,8 @@ const processRefundSchema = {
         approved_by: Joi.number().integer().positive().optional().messages({
             'number.positive': 'Approver ID must be a positive integer'
         }),
+        approver_password: Joi.string().max(128).allow(null, '').optional(),
+        owner_password: Joi.string().max(128).allow(null, '').optional(),
         reference: Joi.string().trim().max(150).allow(null, '').optional().messages({
             'string.max': 'Reference note cannot exceed 150 characters'
         })
@@ -113,10 +110,10 @@ const getRefundsQuerySchema = {
         method: Joi.string().valid('CASH', 'BANK_TRANSFER', 'KHQR').optional(),
         currency: Joi.string().valid('USD', 'KHR').optional(),
         status: Joi.string().valid('PENDING', 'COMPLETED', 'FAILED').optional(),
-        start_date: Joi.string().isoDate().optional().messages({
+        start_date: Joi.string().isoDate().raw().optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date string'
         }),
-        end_date: Joi.string().isoDate().optional().messages({
+        end_date: Joi.string().isoDate().raw().optional().messages({
             'string.isoDate': 'End date must be a valid ISO date string'
         }),
         search: Joi.string().trim().max(100).optional()

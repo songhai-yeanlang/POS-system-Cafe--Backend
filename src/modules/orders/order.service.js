@@ -1,3 +1,4 @@
+const bcrypt = require('bcryptjs');
 const { connection: pool } = require('../../config/db.config');
 const orderModel = require('./order.model');
 const shiftModel = require('../shifts/shift.model');
@@ -126,6 +127,14 @@ const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = n
             throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
         }
 
+        const providedPassword = orderData.approver_password || orderData.owner_password;
+        if (providedPassword && (!currentUser || currentUser.role !== 'OWNER')) {
+            const isValidApproverPass = await bcrypt.compare(String(providedPassword), approver.password_hash);
+            if (!isValidApproverPass) {
+                throw ApiError.forbidden('Invalid OWNER approval password for discount');
+            }
+        }
+
         if (discountType === 'PERCENT') {
             if (discountValue > 100) {
                 throw ApiError.badRequest('Percentage discount cannot exceed 100%');
@@ -188,8 +197,13 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
     let createdOrderId;
     let receiptNo;
     let queueNo;
+    let hasSeqLock = false;
 
     try {
+        // Acquire advisory lock so concurrent orders on the first order of the day never collide on receipt_no or queue_no
+        const [lockRows] = await connection.query("SELECT GET_LOCK('coffee_pos_order_seq', 5) AS acquired");
+        hasSeqLock = Boolean(lockRows[0]?.acquired);
+
         receiptNo = await orderModel.generateReceiptNo(connection);
         const datePrefix = receiptNo.substring(0, 13); // e.g. "RCP-YYYYMMDD-"
         queueNo = await orderModel.getNextQueueNo(datePrefix, connection);
@@ -209,6 +223,11 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
             discountReason: discount.discountReason,
             note: orderData.note && orderData.note.trim() ? orderData.note.trim() : null
         }, connection);
+
+        if (hasSeqLock) {
+            await connection.query("SELECT RELEASE_LOCK('coffee_pos_order_seq')");
+            hasSeqLock = false;
+        }
 
         for (const item of preparedItems) {
             const orderItemId = await orderModel.insertOrderItem({
@@ -239,6 +258,11 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
         await connection.rollback();
         throw error;
     } finally {
+        if (hasSeqLock) {
+            try {
+                await connection.query("SELECT RELEASE_LOCK('coffee_pos_order_seq')");
+            } catch (_) {}
+        }
         connection.release();
     }
 
@@ -389,11 +413,24 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
     // 6. Handle Discount: validate new discount or re-calculate existing discount
     let discount;
     if (orderData.discount_type !== undefined || orderData.discount_value !== undefined) {
+        const nextDiscountType = orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type;
+        const nextDiscountValue = orderData.discount_value !== undefined ? Number(orderData.discount_value) : Number(existingOrder.discount.value);
+        const isDiscountChanged =
+            nextDiscountType !== existingOrder.discount.type ||
+            nextDiscountValue !== Number(existingOrder.discount.value);
+
+        // Security: If a non-OWNER changes the discount type or value, do NOT silently reuse previous owner's approval
+        const resolvedApprovedBy = orderData.discount_approved_by !== undefined
+            ? orderData.discount_approved_by
+            : (isDiscountChanged && user.role !== 'OWNER' ? null : existingOrder.discount.approved_by?.id);
+
         discount = await calculateAndValidateDiscount({
-            discount_type: orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type,
-            discount_value: orderData.discount_value !== undefined ? orderData.discount_value : existingOrder.discount.value,
-            discount_approved_by: orderData.discount_approved_by !== undefined ? orderData.discount_approved_by : existingOrder.discount.approved_by?.id,
-            discount_reason: orderData.discount_reason !== undefined ? orderData.discount_reason : existingOrder.discount.reason
+            discount_type: nextDiscountType,
+            discount_value: nextDiscountValue,
+            discount_approved_by: resolvedApprovedBy,
+            discount_reason: orderData.discount_reason !== undefined ? orderData.discount_reason : existingOrder.discount.reason,
+            approver_password: orderData.approver_password,
+            owner_password: orderData.owner_password
         }, subtotal, user);
     } else if (existingOrder.discount && existingOrder.discount.type !== 'NONE') {
         // Re-validate and re-calculate existing discount against updated subtotal

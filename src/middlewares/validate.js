@@ -6,7 +6,21 @@ const validate = (schema) => (req, res, next) => {
 
     validSections.forEach((section) => {
         if (schema[section]) {
-            const { error, value } = schema[section].validate(req[section], {
+            let input = req[section];
+
+            // For query parameters, ignore empty/whitespace-only strings (e.g. ?role=&search=)
+            // so optional filters and default values work properly
+            if (section === 'query' && input && typeof input === 'object') {
+                input = {};
+                for (const [key, val] of Object.entries(req.query)) {
+                    if (typeof val === 'string' && val.trim() === '') {
+                        continue;
+                    }
+                    input[key] = val;
+                }
+            }
+
+            const { error, value } = schema[section].validate(input, {
                 abortEarly: false,
                 stripUnknown: true
             });
@@ -17,6 +31,14 @@ const validate = (schema) => (req, res, next) => {
                         field: detail.path.join('.'),
                         message: detail.message.replace(/['"]/g, '')
                     });
+                });
+            } else if (section === 'query') {
+                // Express 5 defines req.query as a getter-only property on IncomingMessage.prototype
+                Object.defineProperty(req, 'query', {
+                    value,
+                    writable: true,
+                    enumerable: true,
+                    configurable: true
                 });
             } else {
                 req[section] = value;

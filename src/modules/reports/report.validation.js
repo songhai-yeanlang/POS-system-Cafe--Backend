@@ -2,10 +2,10 @@ const Joi = require('joi');
 
 const getDashboardReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         shift_id: Joi.number().integer().positive().optional().messages({
@@ -16,10 +16,10 @@ const getDashboardReportSchema = {
 
 const getSalesTrendReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         group_by: Joi.string().valid('hour', 'day', 'month').default('day').messages({
@@ -30,10 +30,10 @@ const getSalesTrendReportSchema = {
 
 const getTopProductsReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         category_id: Joi.number().integer().positive().optional().messages({
@@ -48,10 +48,10 @@ const getTopProductsReportSchema = {
 
 const getCategoriesReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         })
     })
@@ -59,10 +59,10 @@ const getCategoriesReportSchema = {
 
 const getPaymentMethodsReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         shift_id: Joi.number().integer().positive().optional().messages({
@@ -73,10 +73,10 @@ const getPaymentMethodsReportSchema = {
 
 const getStaffPerformanceReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
         staff_id: Joi.number().integer().positive().optional().messages({
@@ -87,13 +87,13 @@ const getStaffPerformanceReportSchema = {
 
 const getInventoryUsageReportSchema = {
     query: Joi.object({
-        start_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        start_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'Start date must be a valid ISO date'
         }),
-        end_date: Joi.string().isoDate().allow(null, '').optional().messages({
+        end_date: Joi.string().isoDate().raw().allow(null, '').optional().messages({
             'string.isoDate': 'End date must be a valid ISO date'
         }),
-        low_stock_only: Joi.boolean().optional()
+        low_stock_only: Joi.boolean().truthy('1', 'true').falsy('0', 'false').optional()
     })
 };
 

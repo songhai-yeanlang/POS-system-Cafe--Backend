@@ -95,8 +95,8 @@ const getStockMovementsQuerySchema = {
         movement_type: Joi.string().valid('PURCHASE', 'SALE', 'WASTE', 'ADJUSTMENT', 'RETURN').optional(),
         order_id: Joi.number().integer().positive().optional(),
         created_by: Joi.number().integer().positive().optional(),
-        start_date: Joi.date().iso().optional(),
-        end_date: Joi.date().iso().optional()
+        start_date: Joi.date().iso().raw().optional(),
+        end_date: Joi.date().iso().raw().optional()
     })
 };
 

@@ -5,7 +5,7 @@ const getUsersQuerySchema = {
         page: Joi.number().integer().min(1).default(1),
         limit: Joi.number().integer().min(1).max(100).default(20),
         role: Joi.string().valid('OWNER', 'STAFF').optional(),
-        is_active: Joi.boolean().optional(),
+        is_active: Joi.boolean().truthy('1', 'true').falsy('0', 'false').optional(),
         search: Joi.string().trim().max(100).optional()
     })
 };

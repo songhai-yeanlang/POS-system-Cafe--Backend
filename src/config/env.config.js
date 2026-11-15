@@ -1,17 +1,18 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 module.exports = {
-    port: process.env.PORT,
-    nodeEnv: process.env.NODE_ENV,
+    port: Number(process.env.PORT) || 3000,
+    nodeEnv: process.env.NODE_ENV || 'development',
     jwt: {
-        secret: process.env.JWT_SECRET ,
-        expiresIn: process.env.JWT_EXPIRES_IN
+        secret: process.env.JWT_SECRET,
+        expiresIn: process.env.JWT_EXPIRES_IN || '1d'
     },
     db: {
-        host: process.env.DB_HOST ,
-        user: process.env.DB_USER ,
-        password: process.env.DB_PASSWORD,
-        name: process.env.DB_NAME
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        name: process.env.DB_NAME || 'coffee_pos'
     },
     mail: {
         host: process.env.SMTP_HOST || 'smtp.gmail.com',

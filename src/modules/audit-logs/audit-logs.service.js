@@ -6,12 +6,25 @@ const getAllAuditLogs = async (queryParams = {}) => {
     const limit = parseInt(queryParams.limit, 10) || 20;
     const offset = (page - 1) * limit;
 
+    let adjustedEndDate = queryParams.end_date;
+    if (adjustedEndDate) {
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
+        }
+    }
+
     const filters = {
         userId: queryParams.user_id,
         action: queryParams.action,
         tableName: queryParams.table_name,
         startDate: queryParams.start_date,
-        endDate: queryParams.end_date,
+        endDate: adjustedEndDate,
         limit,
         offset
     };

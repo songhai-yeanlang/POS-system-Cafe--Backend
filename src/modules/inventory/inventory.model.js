@@ -19,9 +19,10 @@ const findAllIngredients = async ({ isActive, search, unit, lowStock, limit, off
     `;
     const params = [];
 
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND i.is_active = ?`;
-        params.push(isActive ? 1 : 0);
+        params.push(activeVal);
     }
 
     if (unit) {
@@ -57,9 +58,10 @@ const countIngredients = async ({ isActive, search, unit, lowStock } = {}) => {
     let sql = `SELECT COUNT(*) AS total FROM ingredients i WHERE 1=1`;
     const params = [];
 
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND i.is_active = ?`;
-        params.push(isActive ? 1 : 0);
+        params.push(activeVal);
     }
 
     if (unit) {
@@ -298,10 +300,9 @@ const deleteStockMovementById = async (id) => {
     const connection = await pool.getConnection();
     try {
         await connection.beginTransaction();
-        await connection.query('SET FOREIGN_KEY_CHECKS = 0');
 
         const [movRows] = await connection.query(
-            'SELECT id, ingredient_id, quantity_change FROM stock_movements WHERE id = ? LIMIT 1 FOR UPDATE',
+            'SELECT id, ingredient_id, movement_type, quantity_change FROM stock_movements WHERE id = ? LIMIT 1 FOR UPDATE',
             [id]
         );
         if (movRows.length === 0) {
@@ -310,15 +311,29 @@ const deleteStockMovementById = async (id) => {
         }
 
         const mov = movRows[0];
-        const qtyChange = Number(mov.quantity_change || 0);
+        let netQtyChange = Number(mov.quantity_change || 0);
 
-        // Reverse the stock movement impact on the ingredient's current_stock
-        if (qtyChange !== 0) {
+        // If this is a SALE movement that was already reversed by a RETURN movement, include the RETURN movement so we don't double-restore stock
+        const [childReturnRows] = await connection.query(
+            'SELECT id, quantity_change FROM stock_movements WHERE source_movement_id = ? LIMIT 1 FOR UPDATE',
+            [id]
+        );
+        if (childReturnRows.length > 0) {
+            netQtyChange = Number((netQtyChange + Number(childReturnRows[0].quantity_change || 0)).toFixed(4));
+            await connection.query('DELETE FROM stock_movements WHERE id = ?', [childReturnRows[0].id]);
+        }
+
+        // Reverse the net stock movement impact on the ingredient's current_stock under row lock
+        if (netQtyChange !== 0) {
+            await connection.query(
+                'SELECT id FROM ingredients WHERE id = ? LIMIT 1 FOR UPDATE',
+                [mov.ingredient_id]
+            );
             await connection.query(
                 `UPDATE ingredients
                  SET current_stock = GREATEST(0, current_stock - ?)
                  WHERE id = ?`,
-                [qtyChange, mov.ingredient_id]
+                [netQtyChange, mov.ingredient_id]
             );
         }
 
@@ -330,9 +345,6 @@ const deleteStockMovementById = async (id) => {
         await connection.rollback();
         throw error;
     } finally {
-        try {
-            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
-        } catch (_) {}
         connection.release();
     }
 };
