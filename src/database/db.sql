@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
   UNIQUE KEY uq_ingredients_name (name),
 
   CONSTRAINT chk_ingredients_name CHECK (CHAR_LENGTH(TRIM(name)) > 0),
-  CONSTRAINT chk_ingredients_minimum CHECK (minimum_stock >= 0)
+  CONSTRAINT chk_ingredients_minimum CHECK (minimum_stock >= 0 AND current_stock >= 0)
 ) ENGINE=InnoDB;
 
 
@@ -490,8 +490,8 @@ CREATE TABLE IF NOT EXISTS payments (
     FOREIGN KEY (received_by) REFERENCES users(id),
 
   CONSTRAINT chk_payments_amount CHECK (
-    amount > 0
-    AND amount_usd > 0
+    amount >= 0
+    AND amount_usd >= 0
     AND received_amount >= amount
     AND change_usd >= 0
     AND change_khr >= 0
@@ -604,8 +604,8 @@ CREATE TABLE IF NOT EXISTS refunds (
     FOREIGN KEY (approved_by) REFERENCES users(id),
 
   CONSTRAINT chk_refunds_amount CHECK (
-    amount > 0
-    AND amount_usd > 0
+    amount >= 0
+    AND amount_usd >= 0
     AND CHAR_LENGTH(TRIM(reason)) > 0
   ),
 

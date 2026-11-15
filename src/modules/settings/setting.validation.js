@@ -44,19 +44,22 @@ const VALID_CLEAR_TARGETS = [
     'AUDIT_LOGS'
 ];
 
+const clearDataTargetFields = {
+    targets: Joi.alternatives().try(
+        Joi.array().items(Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)).min(1),
+        Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)
+    ).optional().messages({
+        'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`,
+        'array.min': 'At least one target must be specified'
+    }),
+    target: Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS).optional().messages({
+        'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`
+    })
+};
+
 const clearDataSchema = {
-    body: Joi.object({
-        targets: Joi.alternatives().try(
-            Joi.array().items(Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)).min(1),
-            Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS)
-        ).optional().messages({
-            'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`,
-            'array.min': 'At least one target must be specified'
-        }),
-        target: Joi.string().uppercase().valid(...VALID_CLEAR_TARGETS).optional().messages({
-            'any.only': `Target must be one of: ${VALID_CLEAR_TARGETS.join(', ')}`
-        })
-    }).optional()
+    body: Joi.object(clearDataTargetFields).optional(),
+    query: Joi.object(clearDataTargetFields).optional()
 };
 
 module.exports = {

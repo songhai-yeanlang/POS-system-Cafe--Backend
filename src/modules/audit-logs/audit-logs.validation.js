@@ -7,8 +7,8 @@ const getAuditLogsSchema = {
         user_id: Joi.number().integer().positive().optional(),
         action: Joi.string().trim().max(100).optional(),
         table_name: Joi.string().trim().max(64).optional(),
-        start_date: Joi.date().iso().optional(),
-        end_date: Joi.date().iso().optional()
+        start_date: Joi.date().iso().raw().optional(),
+        end_date: Joi.date().iso().raw().optional()
     })
 };
 

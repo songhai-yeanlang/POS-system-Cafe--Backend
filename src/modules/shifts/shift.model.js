@@ -237,6 +237,59 @@ const countAllShifts = async ({ userId, status, startDate, endDate } = {}, conne
     return rows[0].total;
 };
 
+const syncClosedShiftExpectedCash = async (shiftId, connection = pool) => {
+    const shift = await findShiftById(shiftId, connection);
+    if (!shift || shift.status !== 'CLOSED') return false;
+
+    const rawSummary = await calculateShiftSummary(shiftId, connection);
+    let cashUsdIn = 0;
+    let cashKhrIn = 0;
+    let cashUsdChange = 0;
+    let cashKhrChange = 0;
+
+    for (const p of rawSummary.payments) {
+        cashUsdChange += p.total_change_usd || 0;
+        cashKhrChange += p.total_change_khr || 0;
+        if (p.method === 'CASH') {
+            const cashReceived = (p.total_received_amount !== undefined && p.total_received_amount !== null)
+                ? p.total_received_amount
+                : p.total_amount;
+            if (p.currency === 'USD') cashUsdIn += cashReceived;
+            if (p.currency === 'KHR') cashKhrIn += cashReceived;
+        }
+    }
+
+    let cashExpensesUsd = 0;
+    let cashExpensesKhr = 0;
+    for (const e of rawSummary.expenses) {
+        if (e.payment_method === 'CASH') {
+            if (e.currency === 'USD') cashExpensesUsd += e.total_amount;
+            if (e.currency === 'KHR') cashExpensesKhr += e.total_amount;
+        }
+    }
+
+    let cashRefundsUsd = 0;
+    let cashRefundsKhr = 0;
+    for (const r of rawSummary.refunds) {
+        if (r.method === 'CASH') {
+            if (r.currency === 'USD') cashRefundsUsd += r.total_amount;
+            if (r.currency === 'KHR') cashRefundsKhr += r.total_amount;
+        }
+    }
+
+    const netCashUsd = Math.round((cashUsdIn - cashUsdChange) * 100) / 100;
+    const netCashKhr = Math.round((cashKhrIn - cashKhrChange) * 100) / 100;
+
+    const expectedCashUsd = Math.max(0, Math.round((shift.opening_cash_usd + netCashUsd - cashExpensesUsd - cashRefundsUsd) * 100) / 100);
+    const expectedCashKhr = Math.max(0, Math.round((shift.opening_cash_khr + netCashKhr - cashExpensesKhr - cashRefundsKhr) * 100) / 100);
+
+    await connection.query(
+        `UPDATE shifts SET expected_cash_usd = ?, expected_cash_khr = ? WHERE id = ? AND status = 'CLOSED'`,
+        [expectedCashUsd, expectedCashKhr, shiftId]
+    );
+    return true;
+};
+
 const deleteShiftById = async (shiftId) => {
     const connection = await pool.getConnection();
     try {
@@ -244,7 +297,7 @@ const deleteShiftById = async (shiftId) => {
         await connection.query('SET FOREIGN_KEY_CHECKS = 0');
 
         const [orderRows] = await connection.query(
-            'SELECT id FROM orders WHERE shift_id = ?',
+            'SELECT id FROM orders WHERE shift_id = ? FOR UPDATE',
             [shiftId]
         );
         if (orderRows.length > 0) {
@@ -270,7 +323,10 @@ const deleteShiftById = async (shiftId) => {
                 }
             }
 
+            await connection.query(`DELETE FROM stock_movements WHERE order_id IN (?) AND movement_type = 'RETURN'`, [orderIds]);
             await connection.query('DELETE FROM stock_movements WHERE order_id IN (?)', [orderIds]);
+            await connection.query('DELETE FROM refunds WHERE order_id IN (?)', [orderIds]);
+            await connection.query('DELETE FROM payments WHERE order_id IN (?)', [orderIds]);
             await connection.query(
                 `DELETE oia FROM order_item_addons oia
                  JOIN order_items oi ON oi.id = oia.order_item_id
@@ -308,5 +364,6 @@ module.exports = {
     closeShiftById,
     findAllShifts,
     countAllShifts,
+    syncClosedShiftExpectedCash,
     deleteShiftById
 };

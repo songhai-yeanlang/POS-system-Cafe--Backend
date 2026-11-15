@@ -16,9 +16,10 @@ const findAllCategories = async ({ isActive, search } = {}) => {
     `;
     const params = [];
 
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND c.is_active = ?`;
-        params.push(isActive ? 1 : 0);
+        params.push(activeVal);
     }
 
     if (search && search.trim()) {
@@ -233,9 +234,10 @@ const findProducts = async ({ categoryId, productType, isActive, search, limit, 
         sql += ` AND p.product_type = ?`;
         params.push(productType);
     }
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND p.is_active = ?`;
-        params.push(isActive ? 1 : 0);
+        params.push(activeVal);
     }
     if (search && search.trim()) {
         sql += ` AND (p.name LIKE ? OR p.description LIKE ? OR c.name LIKE ?)`;
@@ -289,9 +291,10 @@ const countProducts = async ({ categoryId, productType, isActive, search }) => {
         sql += ` AND p.product_type = ?`;
         params.push(productType);
     }
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND p.is_active = ?`;
-        params.push(isActive ? 1 : 0);
+        params.push(activeVal);
     }
     if (search && search.trim()) {
         sql += ` AND (p.name LIKE ? OR p.description LIKE ? OR c.name LIKE ?)`;

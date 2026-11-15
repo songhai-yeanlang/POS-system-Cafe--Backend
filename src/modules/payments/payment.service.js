@@ -1,9 +1,21 @@
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { connection: pool } = require('../../config/db.config');
 const paymentModel = require('./payment.model');
 const shiftModel = require('../shifts/shift.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
+
+const buildStockMovementKey = (baseKey, suffix) => {
+    const combined = `${baseKey}-${suffix}`;
+    if (combined.length <= 100) {
+        return combined;
+    }
+    const baseHash = crypto.createHash('sha256').update(String(baseKey)).digest('hex').slice(0, 16);
+    const maxPrefixLen = Math.max(8, 100 - 1 - baseHash.length - 1 - suffix.length);
+    const safePrefix = String(baseKey).slice(0, maxPrefixLen);
+    return `${safePrefix}-${baseHash}-${suffix}`.slice(0, 100);
+};
 
 const processPayment = async ({ user, paymentData, ipAddress }) => {
     // 1. Verify Cashier Active Shift
@@ -47,9 +59,10 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
     const exchangeRate = Number(settings.exchange_rate) || 4100;
 
     // 5. Calculate Payment Amounts & Change
+    const orderSubtotalUsd = Number(order.subtotal);
     const orderTotalUsd = Number(order.total);
-    if (orderTotalUsd <= 0) {
-        throw ApiError.badRequest('Order total must be greater than 0 to process payment');
+    if (orderSubtotalUsd <= 0 || orderTotalUsd < 0) {
+        throw ApiError.badRequest('Order subtotal must be greater than 0 and total cannot be negative');
     }
     const currency = paymentData.currency || 'USD';
     const method = paymentData.method;
@@ -82,7 +95,12 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
         changeUsd = 0;
         changeKhr = 0;
     } else if (method === 'CASH') {
-        receivedAmount = Number(paymentData.received_amount);
+        if ((paymentData.received_amount === undefined || paymentData.received_amount === null) && amount > 0) {
+            throw ApiError.badRequest('Received amount is required for CASH payment');
+        }
+        receivedAmount = paymentData.received_amount !== undefined && paymentData.received_amount !== null
+            ? Number(paymentData.received_amount)
+            : 0;
         if (receivedAmount < amount) {
             throw ApiError.badRequest(
                 `Received cash amount (${receivedAmount} ${currency}) is less than required order bill (${amount} ${currency})`
@@ -133,7 +151,127 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
     let createdPaymentId;
 
     try {
-        // A. Insert Payment Record
+        // A. Lock Order Row & Re-verify Status Inside Transaction
+        const lockedOrder = await paymentModel.findOrderForPayment(order.id, connection, true);
+        if (!lockedOrder) {
+            throw ApiError.notFound('Order not found');
+        }
+        if (lockedOrder.status === 'PAID') {
+            throw ApiError.badRequest('This order is already paid');
+        }
+        if (lockedOrder.status !== 'OPEN') {
+            throw ApiError.badRequest(`Cannot process payment for an order with status ${lockedOrder.status}`);
+        }
+
+        // B. Prepare & Validate Automatic Recipe Stock Deduction Under Row Lock
+        const { items, addons } = await paymentModel.getOrderItemsForRecipeDeduction(order.id, connection);
+        const allVariantIds = Array.from(new Set([
+            ...items.map(i => i.variant_id),
+            ...addons.map(a => a.addon_variant_id)
+        ]));
+
+        const plannedMovements = [];
+        const requiredByIngredient = new Map();
+
+        if (allVariantIds.length > 0) {
+            const recipes = await paymentModel.getRecipesForVariants(allVariantIds, connection);
+            const recipesByVariant = {};
+            for (const r of recipes) {
+                if (!recipesByVariant[r.variant_id]) {
+                    recipesByVariant[r.variant_id] = [];
+                }
+                recipesByVariant[r.variant_id].push(r);
+            }
+
+            // Collect base order item recipe movements
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                const itemRecipes = recipesByVariant[item.variant_id] || [];
+                for (let j = 0; j < itemRecipes.length; j++) {
+                    const rec = itemRecipes[j];
+                    const usedQty = Number((item.quantity * rec.recipe_quantity).toFixed(4));
+                    if (usedQty <= 0) continue;
+
+                    const movementKey = buildStockMovementKey(idempotencyKey, `item-${item.id}-${rec.recipe_id}`);
+                    plannedMovements.push({
+                        ingredientId: Number(rec.ingredient_id),
+                        usedQty,
+                        movementKey
+                    });
+
+                    const ingId = Number(rec.ingredient_id);
+                    const prev = requiredByIngredient.get(ingId) || {
+                        ingredientId: ingId,
+                        name: rec.ingredient_name,
+                        unit: rec.unit,
+                        totalRequired: 0
+                    };
+                    prev.totalRequired = Number((prev.totalRequired + usedQty).toFixed(4));
+                    requiredByIngredient.set(ingId, prev);
+                }
+            }
+
+            // Collect addon recipe movements
+            for (let i = 0; i < addons.length; i++) {
+                const addon = addons[i];
+                const addonRecipes = recipesByVariant[addon.addon_variant_id] || [];
+                for (let j = 0; j < addonRecipes.length; j++) {
+                    const rec = addonRecipes[j];
+                    const usedQty = Number((addon.quantity * rec.recipe_quantity).toFixed(4));
+                    if (usedQty <= 0) continue;
+
+                    const addonIdentifier = addon.id ? `${addon.id}` : `${addon.addon_variant_id}-${i}`;
+                    const movementKey = buildStockMovementKey(idempotencyKey, `addon-${addonIdentifier}-${rec.recipe_id}`);
+                    plannedMovements.push({
+                        ingredientId: Number(rec.ingredient_id),
+                        usedQty,
+                        movementKey
+                    });
+
+                    const ingId = Number(rec.ingredient_id);
+                    const prev = requiredByIngredient.get(ingId) || {
+                        ingredientId: ingId,
+                        name: rec.ingredient_name,
+                        unit: rec.unit,
+                        totalRequired: 0
+                    };
+                    prev.totalRequired = Number((prev.totalRequired + usedQty).toFixed(4));
+                    requiredByIngredient.set(ingId, prev);
+                }
+            }
+        }
+
+        // Lock all required ingredient rows in ascending ID order & verify sufficient stock
+        if (requiredByIngredient.size > 0) {
+            const lockedIngredients = await paymentModel.lockIngredientsByIds(
+                Array.from(requiredByIngredient.keys()),
+                connection
+            );
+            const lockedMap = new Map(lockedIngredients.map(ing => [Number(ing.id), ing]));
+
+            const shortages = [];
+            for (const [ingId, reqInfo] of requiredByIngredient.entries()) {
+                const lockedIng = lockedMap.get(ingId);
+                if (!lockedIng) {
+                    throw ApiError.badRequest(`Required recipe ingredient '${reqInfo.name}' (#${ingId}) no longer exists`);
+                }
+                const currentStock = Number(lockedIng.current_stock);
+                const remainingStock = Number((currentStock - reqInfo.totalRequired).toFixed(4));
+                if (remainingStock < 0) {
+                    shortages.push(
+                        `'${lockedIng.name}' (available: ${currentStock} ${lockedIng.unit}, required: ${reqInfo.totalRequired} ${lockedIng.unit})`
+                    );
+                }
+            }
+
+            if (shortages.length > 0) {
+                throw ApiError.badRequest(
+                    `Insufficient ingredient stock to complete payment: ${shortages.join('; ')}`
+                );
+            }
+        }
+
+        // C. Insert Payment Record
         createdPaymentId = await paymentModel.insertPayment({
             orderId: order.id,
             shiftId: activeShift.id,
@@ -152,75 +290,36 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
             idempotencyKey
         }, connection);
 
-        // B. Update Order Status to PAID
+        // D. Update Order Status to PAID
         const affectedRows = await paymentModel.updateOrderStatusToPaid(order.id, connection);
         if (affectedRows === 0) {
             throw ApiError.badRequest('Failed to update order status to PAID. Order might have already been processed.');
         }
 
-        // C. Automatic Recipe Stock Deduction
-        const { items, addons } = await paymentModel.getOrderItemsForRecipeDeduction(order.id, connection);
-        const allVariantIds = Array.from(new Set([
-            ...items.map(i => i.variant_id),
-            ...addons.map(a => a.addon_variant_id)
-        ]));
+        // E. Record Stock Movements & Deduct Aggregated Stock per Ingredient
+        for (const mov of plannedMovements) {
+            await paymentModel.insertStockMovement({
+                ingredientId: mov.ingredientId,
+                orderId: order.id,
+                quantityChange: -mov.usedQty,
+                idempotencyKey: mov.movementKey,
+                createdBy: user.id
+            }, connection);
+        }
 
-        if (allVariantIds.length > 0) {
-            const recipes = await paymentModel.getRecipesForVariants(allVariantIds, connection);
-            const recipesByVariant = {};
-            for (const r of recipes) {
-                if (!recipesByVariant[r.variant_id]) {
-                    recipesByVariant[r.variant_id] = [];
-                }
-                recipesByVariant[r.variant_id].push(r);
-            }
-
-            // Deduct base order items
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                const itemRecipes = recipesByVariant[item.variant_id] || [];
-                for (let j = 0; j < itemRecipes.length; j++) {
-                    const rec = itemRecipes[j];
-                    const usedQty = Number((item.quantity * rec.recipe_quantity).toFixed(4));
-                    const movementKey = `${idempotencyKey}-item-${item.id}-${rec.recipe_id}`;
-
-                    await paymentModel.insertStockMovement({
-                        ingredientId: rec.ingredient_id,
-                        orderId: order.id,
-                        quantityChange: -usedQty,
-                        idempotencyKey: movementKey,
-                        createdBy: user.id
-                    }, connection);
-
-                    await paymentModel.deductIngredientStock(rec.ingredient_id, usedQty, connection);
-                }
-            }
-
-            // Deduct addons
-            for (let i = 0; i < addons.length; i++) {
-                const addon = addons[i];
-                const addonRecipes = recipesByVariant[addon.addon_variant_id] || [];
-                for (let j = 0; j < addonRecipes.length; j++) {
-                    const rec = addonRecipes[j];
-                    const usedQty = Number((addon.quantity * rec.recipe_quantity).toFixed(4));
-                    const movementKey = `${idempotencyKey}-addon-${addon.addon_variant_id}-${rec.recipe_id}-${i}`;
-
-                    await paymentModel.insertStockMovement({
-                        ingredientId: rec.ingredient_id,
-                        orderId: order.id,
-                        quantityChange: -usedQty,
-                        idempotencyKey: movementKey,
-                        createdBy: user.id
-                    }, connection);
-
-                    await paymentModel.deductIngredientStock(rec.ingredient_id, usedQty, connection);
-                }
-            }
+        for (const [ingId, reqInfo] of requiredByIngredient.entries()) {
+            await paymentModel.deductIngredientStock(ingId, reqInfo.totalRequired, connection);
         }
 
         await connection.commit();
     } catch (error) {
         await connection.rollback();
+        if (error.errno === 1062 && idempotencyKey) {
+            const concurrentPayment = await paymentModel.findPaymentByIdempotencyKey(idempotencyKey);
+            if (concurrentPayment) {
+                return await paymentModel.findPaymentById(concurrentPayment.id);
+            }
+        }
         throw error;
     } finally {
         connection.release();
@@ -310,10 +409,13 @@ const getAllPayments = async ({ queryParams = {} }) => {
     return {
         payments,
         pagination: {
+            page,
+            limit,
+            total: totalItems,
+            totalPages,
             total_items: totalItems,
             total_pages: totalPages,
-            current_page: page,
-            limit
+            current_page: page
         }
     };
 };
@@ -374,6 +476,14 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
         throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
     }
 
+    const providedPassword = refundData.approver_password || refundData.owner_password;
+    if (providedPassword && user.role !== 'OWNER') {
+        const isValidApproverPass = await bcrypt.compare(String(providedPassword), approverUser.password_hash);
+        if (!isValidApproverPass) {
+            throw ApiError.forbidden('Invalid OWNER approval password for refund');
+        }
+    }
+
     const reason = refundData.reason ? refundData.reason.trim() : '';
     if (!reason) {
         throw ApiError.badRequest('Refund reason is required and cannot be empty');
@@ -390,7 +500,16 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
     let createdRefundId;
 
     try {
-        // A. Insert Refund Record
+        // A. Lock Order Row & Verify PAID Status Inside Transaction
+        const lockedOrder = await paymentModel.findOrderForPayment(payment.order_id, connection, true);
+        if (!lockedOrder) {
+            throw ApiError.notFound(`Order #${payment.order_id} not found`);
+        }
+        if (lockedOrder.status !== 'PAID') {
+            throw ApiError.badRequest(`Cannot refund order with status ${lockedOrder.status}. Only PAID orders can be refunded.`);
+        }
+
+        // B. Insert Refund Record
         createdRefundId = await paymentModel.insertRefund({
             orderId: payment.order_id,
             paymentId: payment.id,
@@ -406,30 +525,35 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
             reference
         }, connection);
 
-        // B. Update Order Status to REFUNDED
+        // C. Update Order Status to REFUNDED
         const affectedRows = await paymentModel.updateOrderStatusToRefunded(payment.order_id, connection);
         if (affectedRows === 0) {
             throw ApiError.badRequest('Failed to update order status to REFUNDED. Order may have already changed status.');
         }
 
-        // C. Reverse Recipe Stock Deductions (Stock Movement: RETURN)
+        // D. Reverse Recipe Stock Deductions (Stock Movement: RETURN) with Row Locks
         const saleMovements = await paymentModel.getSaleStockMovementsForOrder(payment.order_id, connection);
-        for (const sale of saleMovements) {
-            const returnQty = Math.abs(Number(sale.quantity_change));
-            if (returnQty > 0) {
-                const returnKey = `refund-${payment.id}-sale-${sale.id}`;
+        if (saleMovements.length > 0) {
+            const refundIngredientIds = saleMovements.map(s => Number(s.ingredient_id));
+            await paymentModel.lockIngredientsByIds(refundIngredientIds, connection);
 
-                await paymentModel.insertReturnStockMovement({
-                    ingredientId: sale.ingredient_id,
-                    orderId: payment.order_id,
-                    sourceMovementId: sale.id,
-                    quantityChange: returnQty,
-                    reason: `Order Refund #${payment.order_id}: ${reason}`,
-                    idempotencyKey: returnKey,
-                    createdBy: user.id
-                }, connection);
+            for (const sale of saleMovements) {
+                const returnQty = Math.abs(Number(sale.quantity_change));
+                if (returnQty > 0) {
+                    const returnKey = buildStockMovementKey(`refund-${payment.id}`, `sale-${sale.id}`);
 
-                await paymentModel.restoreIngredientStock(sale.ingredient_id, returnQty, connection);
+                    await paymentModel.insertReturnStockMovement({
+                        ingredientId: sale.ingredient_id,
+                        orderId: payment.order_id,
+                        sourceMovementId: sale.id,
+                        quantityChange: returnQty,
+                        reason: `Order Refund #${payment.order_id}: ${reason}`,
+                        idempotencyKey: returnKey,
+                        createdBy: user.id
+                    }, connection);
+
+                    await paymentModel.restoreIngredientStock(sale.ingredient_id, returnQty, connection);
+                }
             }
         }
 
@@ -515,10 +639,13 @@ const getAllRefunds = async ({ queryParams = {} }) => {
     return {
         refunds,
         pagination: {
+            page,
+            limit,
+            total: totalItems,
+            totalPages,
             total_items: totalItems,
             total_pages: totalPages,
-            current_page: page,
-            limit
+            current_page: page
         }
     };
 };

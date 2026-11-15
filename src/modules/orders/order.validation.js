@@ -21,6 +21,8 @@ const createOrderSchema = {
         }),
         discount_approved_by: Joi.number().integer().positive().allow(null).optional(),
         discount_reason: Joi.string().trim().max(255).allow(null, '').optional(),
+        approver_password: Joi.string().max(128).allow(null, '').optional(),
+        owner_password: Joi.string().max(128).allow(null, '').optional(),
         items: Joi.array().items(
             Joi.object({
                 variant_id: Joi.number().integer().positive().required().messages({
@@ -77,8 +79,8 @@ const getAllOrdersQuerySchema = {
         order_type: Joi.string().valid('DINE_IN', 'TAKEAWAY').optional(),
         shift_id: Joi.number().integer().positive().optional(),
         cashier_id: Joi.number().integer().positive().optional(),
-        start_date: Joi.date().iso().optional(),
-        end_date: Joi.date().iso().optional(),
+        start_date: Joi.date().iso().raw().optional(),
+        end_date: Joi.date().iso().raw().optional(),
         search: Joi.string().trim().max(50).optional()
     })
 };
@@ -108,6 +110,8 @@ const updateOrderSchema = {
         }),
         discount_approved_by: Joi.number().integer().positive().allow(null).optional(),
         discount_reason: Joi.string().trim().max(255).allow(null, '').optional(),
+        approver_password: Joi.string().max(128).allow(null, '').optional(),
+        owner_password: Joi.string().max(128).allow(null, '').optional(),
         items: Joi.array().items(
             Joi.object({
                 variant_id: Joi.number().integer().positive().required().messages({

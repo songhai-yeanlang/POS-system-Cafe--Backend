@@ -259,7 +259,8 @@ const countAllPayments = async ({
     return Number(rows[0]?.total || 0);
 };
 
-const findOrderForPayment = async (orderId, connection = pool) => {
+const findOrderForPayment = async (orderId, connection = pool, forUpdate = false) => {
+    const lockClause = forUpdate ? ' FOR UPDATE' : '';
     const [rows] = await connection.query(
         `SELECT 
             id,
@@ -272,7 +273,7 @@ const findOrderForPayment = async (orderId, connection = pool) => {
             CAST(total AS DOUBLE) AS total
          FROM orders
          WHERE id = ?
-         LIMIT 1`,
+         LIMIT 1${lockClause}`,
         [orderId]
     );
     return rows[0] || null;
@@ -292,7 +293,7 @@ const getOrderItemsForRecipeDeduction = async (orderId, connection = pool) => {
     );
 
     const [addons] = await connection.query(
-        `SELECT oia.addon_variant_id, oia.quantity
+        `SELECT oia.id, oia.addon_variant_id, oia.quantity
          FROM order_item_addons oia
          JOIN order_items oi ON oi.id = oia.order_item_id
          WHERE oi.order_id = ?`,
@@ -318,6 +319,26 @@ const getRecipesForVariants = async (variantIds = [], connection = pool) => {
          JOIN ingredients i ON i.id = r.ingredient_id
          WHERE r.variant_id IN (?)`,
         [variantIds]
+    );
+    return rows;
+};
+
+const lockIngredientsByIds = async (ingredientIds = [], connection = pool) => {
+    const sortedIds = Array.from(new Set(ingredientIds.map(id => Number(id)))).sort((a, b) => a - b);
+    if (!sortedIds.length) return [];
+
+    const [rows] = await connection.query(
+        `SELECT 
+            id,
+            name,
+            unit,
+            CAST(current_stock AS DOUBLE) AS current_stock,
+            is_active
+         FROM ingredients
+         WHERE id IN (?)
+         ORDER BY id ASC
+         FOR UPDATE`,
+        [sortedIds]
     );
     return rows;
 };
@@ -731,10 +752,14 @@ const restoreIngredientStock = async (ingredientId, quantity, connection = pool)
 
 const findActiveOwnerById = async (userId, connection = pool) => {
     const [rows] = await connection.query(
-        `SELECT id, name, role, is_active FROM users WHERE id = ? AND role = 'OWNER' AND is_active = TRUE LIMIT 1`,
+        `SELECT id, name, role, is_active, password_hash FROM users WHERE id = ? AND role = 'OWNER' AND is_active = TRUE LIMIT 1`,
         [userId]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 module.exports = {
@@ -747,6 +772,7 @@ module.exports = {
     getShopSettings,
     getOrderItemsForRecipeDeduction,
     getRecipesForVariants,
+    lockIngredientsByIds,
     insertPayment,
     updateOrderStatusToPaid,
     insertStockMovement,

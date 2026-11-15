@@ -12,9 +12,10 @@ const findUsers = async ({ role, isActive, search, limit, offset }) => {
         sql += ` AND role = ?`;
         params.push(role);
     }
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND is_active = ?`;
-        params.push(isActive);
+        params.push(activeVal);
     }
     if (search) {
         sql += ` AND (name LIKE ? OR email LIKE ?)`;
@@ -25,7 +26,10 @@ const findUsers = async ({ role, isActive, search, limit, offset }) => {
     params.push(Number(limit), Number(offset));
 
     const [rows] = await pool.query(sql, params);
-    return rows;
+    return rows.map((row) => ({
+        ...row,
+        is_active: Boolean(row.is_active)
+    }));
 };
 
 const countUsers = async ({ role, isActive, search }) => {
@@ -36,9 +40,10 @@ const countUsers = async ({ role, isActive, search }) => {
         sql += ` AND role = ?`;
         params.push(role);
     }
-    if (isActive !== undefined && isActive !== null) {
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        const activeVal = (isActive === true || isActive === 'true' || isActive === 1 || isActive === '1') ? 1 : 0;
         sql += ` AND is_active = ?`;
-        params.push(isActive);
+        params.push(activeVal);
     }
     if (search) {
         sql += ` AND (name LIKE ? OR email LIKE ?)`;
@@ -70,7 +75,11 @@ const findUserById = async (id) => {
         'SELECT id, name, email, role, is_active, last_login_at, created_at, updated_at FROM users WHERE id = ? LIMIT 1',
         [id]
     );
-    return rows[0] || null;
+    if (!rows[0]) return null;
+    return {
+        ...rows[0],
+        is_active: Boolean(rows[0].is_active)
+    };
 };
 
 const insertUser = async ({ name, email, passwordHash, role, isActive }) => {

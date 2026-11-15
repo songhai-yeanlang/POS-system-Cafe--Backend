@@ -238,13 +238,9 @@ const updateIngredient = async ({ id, updateData, updaterId, ipAddress }) => {
         cleanUpdate.unit = updateData.unit;
     }
 
-    // 4. Stock adjustment calculation
-    let stockDiff = 0;
+    // 4. Stock adjustment preparation
     if (updateData.current_stock !== undefined) {
-        const newStock = Number(Number(updateData.current_stock).toFixed(4));
-        const oldStock = Number(existing.current_stock);
-        stockDiff = Number((newStock - oldStock).toFixed(4));
-        cleanUpdate.current_stock = newStock;
+        cleanUpdate.current_stock = Number(Number(updateData.current_stock).toFixed(4));
     }
 
     if (updateData.minimum_stock !== undefined) {
@@ -255,10 +251,22 @@ const updateIngredient = async ({ id, updateData, updaterId, ipAddress }) => {
         cleanUpdate.is_active = Boolean(updateData.is_active);
     }
 
-    // 5. Update ingredient and record movement in transaction
+    // 5. Update ingredient and record movement in transaction with row lock
     const connection = await pool.getConnection();
+    let previousStock = Number(existing.current_stock);
     try {
         await connection.beginTransaction();
+
+        const lockedExisting = await inventoryModel.findIngredientByIdForUpdate(id, connection);
+        if (!lockedExisting) {
+            throw ApiError.notFound('Ingredient not found');
+        }
+        previousStock = Number(lockedExisting.current_stock);
+
+        let stockDiff = 0;
+        if (cleanUpdate.current_stock !== undefined) {
+            stockDiff = Number((cleanUpdate.current_stock - previousStock).toFixed(4));
+        }
 
         await inventoryModel.updateIngredientById(id, cleanUpdate, connection);
 

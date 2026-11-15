@@ -52,6 +52,12 @@ const errorHandler = (err, req, res, next) => {
     } else if (err.code === 'ER_ROW_IS_REFERENCED_2') {
         statusCode = 400;
         message = 'Cannot delete or update: Record is currently in use by other data';
+    } else if (err.code === 'ER_CHECK_CONSTRAINT_VIOLATED' || err.errno === 3819) {
+        statusCode = 400;
+        message = 'Data validation failed: Database constraint violated';
+    } else if (err.code === 'ER_DATA_TOO_LONG' || err.errno === 1406) {
+        statusCode = 400;
+        message = 'Input value is too long for one of the fields';
     } else if (err.code === 'ECONNREFUSED') {
         statusCode = 503;
         message = 'Database service unavailable';
