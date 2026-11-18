@@ -251,7 +251,63 @@ CREATE TABLE IF NOT EXISTS shifts (
 
 
 -- ==========================================================
--- 10. ORDERS (Fixed: DB-01, DB-08, NEW-01, NEW-02)
+-- 10. DISCOUNT CODES (PROMO CODES & VOUCHERS) /17.11.2026
+-- ==========================================================
+CREATE TABLE IF NOT EXISTS discount_codes (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(50) NOT NULL COMMENT 'Uppercase promo code e.g. VIP10, OPENING20',
+  name VARCHAR(150) NOT NULL COMMENT 'Promotion title/reason shown on receipt',
+  description VARCHAR(500) NULL,
+  discount_type ENUM('PERCENT', 'FIXED') NOT NULL,
+  discount_value DECIMAL(12,2) NOT NULL COMMENT 'Percentage (0.01-100) or Fixed USD amount',
+  min_order_amount DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT 'Minimum order subtotal (USD) required',
+  max_uses INT UNSIGNED NULL COMMENT 'Maximum total times this code can be used (NULL = unlimited)',
+  used_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Number of active/paid orders that used this code',
+  starts_at DATETIME NULL COMMENT 'Optional start date/time of validity',
+  expires_at DATETIME NULL COMMENT 'Optional expiration date/time of validity',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by BIGINT UNSIGNED NOT NULL COMMENT 'OWNER user who created this discount code',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_discount_codes_code (code),
+  KEY idx_discount_codes_active_dates (is_active, starts_at, expires_at),
+  KEY idx_discount_codes_creator (created_by),
+
+  CONSTRAINT fk_discount_codes_creator
+    FOREIGN KEY (created_by) REFERENCES users(id),
+
+  CONSTRAINT chk_discount_codes_code
+    CHECK (CHAR_LENGTH(TRIM(code)) > 0),
+
+  CONSTRAINT chk_discount_codes_name
+    CHECK (CHAR_LENGTH(TRIM(name)) > 0),
+
+  CONSTRAINT chk_discount_codes_value CHECK (
+    discount_value > 0
+    AND (
+      discount_type = 'FIXED'
+      OR (discount_type = 'PERCENT' AND discount_value <= 100)
+    )
+  ),
+
+  CONSTRAINT chk_discount_codes_limits CHECK (
+    min_order_amount >= 0
+    AND (max_uses IS NULL OR max_uses > 0)
+    AND (max_uses IS NULL OR used_count <= max_uses)
+  ),
+
+  CONSTRAINT chk_discount_codes_dates CHECK (
+    starts_at IS NULL
+    OR expires_at IS NULL
+    OR expires_at > starts_at
+  )
+) ENGINE=InnoDB;
+
+
+-- ==========================================================
+-- 11. ORDERS (Fixed: DB-01, DB-08, NEW-01, NEW-02)
 -- ==========================================================
 CREATE TABLE IF NOT EXISTS orders (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -266,6 +322,7 @@ CREATE TABLE IF NOT EXISTS orders (
     NOT NULL DEFAULT 'OPEN',
 
   subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+  discount_code_id BIGINT UNSIGNED NULL,
   discount_type ENUM('NONE', 'PERCENT', 'FIXED') NOT NULL DEFAULT 'NONE',
   discount_value DECIMAL(12,2) NOT NULL DEFAULT 0,
   discount_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -289,12 +346,17 @@ CREATE TABLE IF NOT EXISTS orders (
   KEY idx_orders_status_date (status, created_at),
   KEY idx_orders_cashier_date (cashier_id, created_at),
   KEY idx_orders_shift (shift_id),
+  KEY idx_orders_discount_code (discount_code_id),
 
   CONSTRAINT fk_orders_cashier
     FOREIGN KEY (cashier_id) REFERENCES users(id),
 
   CONSTRAINT fk_orders_shift
     FOREIGN KEY (shift_id) REFERENCES shifts(id),
+
+  CONSTRAINT fk_orders_discount_code
+    FOREIGN KEY (discount_code_id) REFERENCES discount_codes(id)
+    ON DELETE SET NULL,
 
   CONSTRAINT fk_orders_discount_owner
     FOREIGN KEY (discount_approved_by) REFERENCES users(id),
@@ -335,6 +397,7 @@ CREATE TABLE IF NOT EXISTS orders (
   CONSTRAINT chk_orders_discount_approval CHECK (
     (
       discount_type = 'NONE'
+      AND discount_code_id IS NULL
       AND discount_value = 0
       AND discount_amount = 0
       AND discount_approved_by IS NULL

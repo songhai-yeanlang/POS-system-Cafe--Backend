@@ -19,6 +19,8 @@ const createOrderSchema = {
         discount_value: Joi.number().min(0).default(0).messages({
             'number.min': 'Discount value cannot be negative'
         }),
+        discount_code: Joi.string().trim().max(50).allow(null, '').optional(),
+        discount_code_id: Joi.number().integer().positive().allow(null).optional(),
         discount_approved_by: Joi.number().integer().positive().allow(null).optional(),
         discount_reason: Joi.string().trim().max(255).allow(null, '').optional(),
         approver_password: Joi.string().max(128).allow(null, '').optional(),
@@ -108,6 +110,8 @@ const updateOrderSchema = {
         discount_value: Joi.number().min(0).optional().messages({
             'number.min': 'Discount value cannot be negative'
         }),
+        discount_code: Joi.string().trim().max(50).allow(null, '').optional(),
+        discount_code_id: Joi.number().integer().positive().allow(null).optional(),
         discount_approved_by: Joi.number().integer().positive().allow(null).optional(),
         discount_reason: Joi.string().trim().max(255).allow(null, '').optional(),
         approver_password: Joi.string().max(128).allow(null, '').optional(),

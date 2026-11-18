@@ -20,6 +20,7 @@ const orderRoutes = require('./modules/orders/order.route');
 const paymentRoutes = require('./modules/payments/payment.route');
 const expenseRoutes = require('./modules/expenses/expense.route');
 const reportRoutes = require('./modules/reports/report.route');
+const discountRoutes = require('./modules/discount-codes/discount-code.route');
 const app = express();
 
 app.set('trust proxy', 1);
@@ -44,6 +45,7 @@ app.use('/api', orderRoutes);
 app.use('/api', paymentRoutes);
 app.use('/api', expenseRoutes);
 app.use('/api', reportRoutes);
+app.use('/api', discountRoutes);
 
 
 // 404 Handler

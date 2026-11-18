@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { connection: pool } = require('../../config/db.config');
 const orderModel = require('./order.model');
 const shiftModel = require('../shifts/shift.model');
+const discountCodeModel = require('../discount-codes/discount-code.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
 
@@ -99,16 +100,82 @@ const prepareOrderItemsAndSubtotal = async (items = []) => {
 };
 
 /**
- * Helper to calculate and validate discounts
+ * Helper to calculate and validate discounts (supports both promo codes and manual discounts)
  */
-const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = null) => {
+const calculateAndValidateDiscount = async (
+    orderData,
+    subtotal,
+    currentUser = null,
+    { existingCodeId = null, isRevalidatingExisting = false } = {}
+) => {
+    let discountCodeId = null;
     let discountType = orderData.discount_type || 'NONE';
     let discountValue = Number(orderData.discount_value) || 0;
     let discountAmount = 0;
     let discountApprovedBy = null;
     let discountReason = null;
 
-    if (discountType !== 'NONE' && discountValue > 0) {
+    // Case A: Discount applied via Promo Code (discount_code or discount_code_id)
+    // NOTE: Must NOT be blocked when discount_type defaulted to 'NONE' in Joi schema!
+    const hasPromoCode =
+        (orderData.discount_code && String(orderData.discount_code).trim()) ||
+        orderData.discount_code_id;
+
+    if (hasPromoCode) {
+        const codeRecord = orderData.discount_code
+            ? await discountCodeModel.findDiscountCodeByCode(String(orderData.discount_code).trim())
+            : await discountCodeModel.findDiscountCodeById(orderData.discount_code_id);
+
+        if (!codeRecord) {
+            throw ApiError.badRequest(
+                `Discount code '${orderData.discount_code || orderData.discount_code_id}' is invalid or does not exist`
+            );
+        }
+
+        if (!codeRecord.is_active) {
+            throw ApiError.badRequest(`Discount code '${codeRecord.code}' is currently inactive`);
+        }
+
+        if (codeRecord.is_not_started) {
+            throw ApiError.badRequest(`Discount code '${codeRecord.code}' is not active yet`);
+        }
+
+        if (codeRecord.is_expired) {
+            throw ApiError.badRequest(`Discount code '${codeRecord.code}' has expired`);
+        }
+
+        // Only block on is_exhausted if this is a NEW usage (not re-validating an existing order already holding this code)
+        if (codeRecord.is_exhausted && Number(existingCodeId) !== Number(codeRecord.id)) {
+            throw ApiError.badRequest(
+                `Discount code '${codeRecord.code}' has reached its maximum usage limit (${codeRecord.max_uses})`
+            );
+        }
+
+        if (subtotal < codeRecord.min_order_amount) {
+            throw ApiError.badRequest(
+                `Order subtotal ($${subtotal.toFixed(2)}) does not meet the minimum required amount ($${codeRecord.min_order_amount.toFixed(2)}) for code '${codeRecord.code}'`
+            );
+        }
+
+        discountCodeId = codeRecord.id;
+        discountType = codeRecord.discount_type;
+        discountValue = Number(codeRecord.discount_value.toFixed(2));
+        discountApprovedBy = codeRecord.created_by?.id || orderData.discount_approved_by;
+        discountReason = orderData.discount_reason && orderData.discount_reason.trim()
+            ? orderData.discount_reason.trim()
+            : `${codeRecord.code} - ${codeRecord.name}`;
+
+        if (discountType === 'PERCENT') {
+            discountAmount = Number((Math.round(((subtotal * discountValue) / 100) * 100) / 100).toFixed(2));
+        } else {
+            if (discountValue > subtotal) {
+                throw ApiError.badRequest(
+                    `Fixed discount ($${discountValue.toFixed(2)}) for code '${codeRecord.code}' cannot exceed order subtotal ($${subtotal.toFixed(2)})`
+                );
+            }
+            discountAmount = discountValue;
+        }
+    } else if (discountType !== 'NONE' && discountValue > 0) {
         if (!orderData.discount_reason || !orderData.discount_reason.trim()) {
             throw ApiError.badRequest('Discount reason is required when applying a discount');
         }
@@ -140,14 +207,16 @@ const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = n
                 throw ApiError.forbidden('Invalid OWNER approval password for discount');
             }
             approverId = matchedOwner.id;
-        } else {
-            if (!approverId) {
-                throw ApiError.badRequest('Discounts must be approved by an authorized OWNER. Please provide owner_password or discount_approved_by');
-            }
+        } else if (isRevalidatingExisting && approverId) {
+            // Re-validating an unchanged previously-approved discount when items/notes are updated
             const approver = await orderModel.findUserRoleById(approverId);
             if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
                 throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
             }
+        } else {
+            throw ApiError.forbidden(
+                'Staff members must use a valid discount_code or OWNER approval password to apply a discount'
+            );
         }
 
         if (discountType === 'PERCENT') {
@@ -168,6 +237,7 @@ const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = n
         discountApprovedBy = approverId;
         discountReason = orderData.discount_reason.trim();
     } else {
+        discountCodeId = null;
         discountType = 'NONE';
         discountValue = 0;
         discountAmount = 0;
@@ -176,6 +246,7 @@ const calculateAndValidateDiscount = async (orderData, subtotal, currentUser = n
     }
 
     return {
+        discountCodeId,
         discountType,
         discountValue,
         discountAmount,
@@ -223,6 +294,13 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
         const datePrefix = receiptNo.substring(0, 13); // e.g. "RCP-YYYYMMDD-"
         queueNo = await orderModel.getNextQueueNo(datePrefix, connection);
 
+        if (discount.discountCodeId) {
+            const incremented = await discountCodeModel.incrementUsedCount(discount.discountCodeId, connection);
+            if (!incremented) {
+                throw ApiError.badRequest('Discount code is no longer valid or has reached its maximum usage limit');
+            }
+        }
+
         createdOrderId = await orderModel.insertOrder({
             receiptNo,
             queueNo,
@@ -231,6 +309,7 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
             orderType,
             tableNo,
             subtotal,
+            discountCodeId: discount.discountCodeId,
             discountType: discount.discountType,
             discountValue: discount.discountValue,
             discountAmount: discount.discountAmount,
@@ -360,6 +439,8 @@ const getAllOrders = async ({ queryParams = {} }) => {
         status: o.status,
         subtotal: o.subtotal,
         discount: {
+            code_id: o.discount_code_id || null,
+            code: o.discount_code || null,
             type: o.discount_type,
             value: o.discount_value,
             amount: o.discount_amount
@@ -428,36 +509,79 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
 
     // 6. Handle Discount: validate new discount or re-calculate existing discount
     let discount;
-    if (orderData.discount_type !== undefined || orderData.discount_value !== undefined) {
-        const nextDiscountType = orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type;
-        const nextDiscountValue = orderData.discount_value !== undefined ? Number(orderData.discount_value) : Number(existingOrder.discount.value);
-        const isDiscountChanged =
-            nextDiscountType !== existingOrder.discount.type ||
-            nextDiscountValue !== Number(existingOrder.discount.value);
+    const isDiscountUpdated =
+        orderData.discount_type !== undefined ||
+        orderData.discount_value !== undefined ||
+        orderData.discount_code !== undefined ||
+        orderData.discount_code_id !== undefined;
 
-        // Security: If a non-OWNER changes the discount type or value, do NOT silently reuse previous owner's approval
-        const resolvedApprovedBy = orderData.discount_approved_by !== undefined
-            ? orderData.discount_approved_by
-            : (isDiscountChanged && user.role !== 'OWNER' ? null : existingOrder.discount.approved_by?.id);
+    if (isDiscountUpdated) {
+        const hasNewPromoCode =
+            (orderData.discount_code && String(orderData.discount_code).trim()) ||
+            orderData.discount_code_id;
 
-        discount = await calculateAndValidateDiscount({
-            discount_type: nextDiscountType,
-            discount_value: nextDiscountValue,
-            discount_approved_by: resolvedApprovedBy,
-            discount_reason: orderData.discount_reason !== undefined ? orderData.discount_reason : existingOrder.discount.reason,
-            approver_password: orderData.approver_password,
-            owner_password: orderData.owner_password
-        }, subtotal, user);
+        if (orderData.discount_type === 'NONE' && !hasNewPromoCode) {
+            // Explicitly clearing any existing discount or promo code
+            discount = {
+                discountCodeId: null,
+                discountType: 'NONE',
+                discountValue: 0,
+                discountAmount: 0,
+                discountApprovedBy: null,
+                discountReason: null
+            };
+        } else {
+            const nextDiscountType = orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type;
+            const nextDiscountValue = orderData.discount_value !== undefined ? Number(orderData.discount_value) : Number(existingOrder.discount.value);
+            const isDiscountChanged =
+                nextDiscountType !== existingOrder.discount.type ||
+                nextDiscountValue !== Number(existingOrder.discount.value) ||
+                Boolean(hasNewPromoCode);
+
+            // Security: If a non-OWNER changes the discount type or value, do NOT silently reuse previous owner's approval
+            const resolvedApprovedBy = orderData.discount_approved_by !== undefined
+                ? orderData.discount_approved_by
+                : (isDiscountChanged && user.role !== 'OWNER' ? null : existingOrder.discount.approved_by?.id);
+
+            discount = await calculateAndValidateDiscount(
+                {
+                    discount_code: orderData.discount_code,
+                    discount_code_id: orderData.discount_code_id,
+                    discount_type: nextDiscountType,
+                    discount_value: nextDiscountValue,
+                    discount_approved_by: resolvedApprovedBy,
+                    discount_reason: orderData.discount_reason !== undefined ? orderData.discount_reason : existingOrder.discount.reason,
+                    approver_password: orderData.approver_password,
+                    owner_password: orderData.owner_password
+                },
+                subtotal,
+                user,
+                {
+                    existingCodeId: existingOrder.discount?.code_id,
+                    isRevalidatingExisting: !isDiscountChanged
+                }
+            );
+        }
     } else if (existingOrder.discount && existingOrder.discount.type !== 'NONE') {
         // Re-validate and re-calculate existing discount against updated subtotal
-        discount = await calculateAndValidateDiscount({
-            discount_type: existingOrder.discount.type,
-            discount_value: existingOrder.discount.value,
-            discount_approved_by: existingOrder.discount.approved_by?.id,
-            discount_reason: existingOrder.discount.reason
-        }, subtotal, user);
+        discount = await calculateAndValidateDiscount(
+            {
+                discount_code_id: existingOrder.discount.code_id,
+                discount_type: existingOrder.discount.type,
+                discount_value: existingOrder.discount.value,
+                discount_approved_by: existingOrder.discount.approved_by?.id,
+                discount_reason: existingOrder.discount.reason
+            },
+            subtotal,
+            user,
+            {
+                existingCodeId: existingOrder.discount?.code_id,
+                isRevalidatingExisting: true
+            }
+        );
     } else {
         discount = {
+            discountCodeId: null,
             discountType: 'NONE',
             discountValue: 0,
             discountAmount: 0,
@@ -475,6 +599,21 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
     await connection.beginTransaction();
 
     try {
+        const prevCodeId = existingOrder.discount?.code_id ? Number(existingOrder.discount.code_id) : null;
+        const nextCodeId = discount.discountCodeId ? Number(discount.discountCodeId) : null;
+
+        if (prevCodeId !== nextCodeId) {
+            if (prevCodeId) {
+                await discountCodeModel.decrementUsedCount(prevCodeId, connection);
+            }
+            if (nextCodeId) {
+                const incremented = await discountCodeModel.incrementUsedCount(nextCodeId, connection);
+                if (!incremented) {
+                    throw ApiError.badRequest('Discount code is no longer valid or has reached its maximum usage limit');
+                }
+            }
+        }
+
         if (preparedItems) {
             // Delete existing items (cascades to order_item_addons)
             await orderModel.deleteOrderItemsByOrderId(orderId, connection);
@@ -511,6 +650,7 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
             orderType,
             tableNo,
             subtotal,
+            discountCodeId: discount.discountCodeId,
             discountType: discount.discountType,
             discountValue: discount.discountValue,
             discountAmount: discount.discountAmount,
@@ -589,15 +729,33 @@ const cancelOrder = async ({ orderId, user, reason, ipAddress }) => {
 
     const cleanReason = reason.trim();
 
-    // 3. Update status to CANCELLED
-    const affectedRows = await orderModel.cancelOrderById({
-        orderId,
-        cancelledBy: user.id,
-        cancellationReason: cleanReason
-    });
+    // 3. Update status to CANCELLED atomically (and restore discount code usage if applicable)
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    try {
+        const affectedRows = await orderModel.cancelOrderById(
+            {
+                orderId,
+                cancelledBy: user.id,
+                cancellationReason: cleanReason
+            },
+            connection
+        );
 
-    if (affectedRows === 0) {
-        throw ApiError.badRequest('Failed to cancel order. Order might have already been processed.');
+        if (affectedRows === 0) {
+            throw ApiError.badRequest('Failed to cancel order. Order might have already been processed.');
+        }
+
+        if (existingOrder.discount?.code_id) {
+            await discountCodeModel.decrementUsedCount(existingOrder.discount.code_id, connection);
+        }
+
+        await connection.commit();
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
     }
 
     // 4. Audit Log

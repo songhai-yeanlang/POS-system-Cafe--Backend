@@ -90,6 +90,7 @@ const insertOrder = async ({
     orderType,
     tableNo = null,
     subtotal = 0,
+    discountCodeId = null,
     discountType = 'NONE',
     discountValue = 0,
     discountAmount = 0,
@@ -107,13 +108,14 @@ const insertOrder = async ({
             table_no,
             status,
             subtotal,
+            discount_code_id,
             discount_type,
             discount_value,
             discount_amount,
             discount_approved_by,
             discount_reason,
             note
-        ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             receiptNo,
             queueNo,
@@ -122,6 +124,7 @@ const insertOrder = async ({
             orderType,
             tableNo,
             subtotal,
+            discountCodeId,
             discountType,
             discountValue,
             discountAmount,
@@ -138,6 +141,7 @@ const updateOrderById = async ({
     orderType,
     tableNo = null,
     subtotal = 0,
+    discountCodeId = null,
     discountType = 'NONE',
     discountValue = 0,
     discountAmount = 0,
@@ -150,6 +154,7 @@ const updateOrderById = async ({
             order_type = ?,
             table_no = ?,
             subtotal = ?,
+            discount_code_id = ?,
             discount_type = ?,
             discount_value = ?,
             discount_amount = ?,
@@ -161,6 +166,7 @@ const updateOrderById = async ({
             orderType,
             tableNo,
             subtotal,
+            discountCodeId,
             discountType,
             discountValue,
             discountAmount,
@@ -267,6 +273,8 @@ const findOrderById = async (orderId, connection = pool) => {
             o.table_no,
             o.status,
             CAST(o.subtotal AS DOUBLE) AS subtotal,
+            o.discount_code_id,
+            dc.code AS discount_code,
             o.discount_type,
             CAST(o.discount_value AS DOUBLE) AS discount_value,
             CAST(o.discount_amount AS DOUBLE) AS discount_amount,
@@ -284,6 +292,7 @@ const findOrderById = async (orderId, connection = pool) => {
             o.updated_at
          FROM orders o
          JOIN users u ON u.id = o.cashier_id
+         LEFT JOIN discount_codes dc ON dc.id = o.discount_code_id
          LEFT JOIN users appr ON appr.id = o.discount_approved_by
          LEFT JOIN users canc ON canc.id = o.cancelled_by
          WHERE o.id = ?
@@ -405,6 +414,8 @@ const findOrderById = async (orderId, connection = pool) => {
         status: order.status,
         subtotal: order.subtotal,
         discount: {
+            code_id: order.discount_code_id || null,
+            code: order.discount_code || null,
             type: order.discount_type,
             value: order.discount_value,
             amount: order.discount_amount,
@@ -455,6 +466,8 @@ const findAllOrders = async ({
             o.table_no,
             o.status,
             CAST(o.subtotal AS DOUBLE) AS subtotal,
+            o.discount_code_id,
+            dc.code AS discount_code,
             o.discount_type,
             CAST(o.discount_value AS DOUBLE) AS discount_value,
             CAST(o.discount_amount AS DOUBLE) AS discount_amount,
@@ -468,6 +481,7 @@ const findAllOrders = async ({
             o.updated_at
         FROM orders o
         JOIN users u ON u.id = o.cashier_id
+        LEFT JOIN discount_codes dc ON dc.id = o.discount_code_id
         WHERE 1=1
     `;
     const params = [];
@@ -606,7 +620,25 @@ const deleteOrderById = async (orderId) => {
             [orderId]
         );
         await connection.query('DELETE FROM order_items WHERE order_id = ?', [orderId]);
+        const [orderMetaRows] = await connection.query(
+            'SELECT status, discount_code_id FROM orders WHERE id = ? LIMIT 1',
+            [orderId]
+        );
         const [result] = await connection.query('DELETE FROM orders WHERE id = ?', [orderId]);
+
+        if (
+            result.affectedRows > 0 &&
+            orderMetaRows[0] &&
+            orderMetaRows[0].status !== 'CANCELLED' &&
+            orderMetaRows[0].discount_code_id
+        ) {
+            await connection.query(
+                `UPDATE discount_codes
+                 SET used_count = CASE WHEN used_count > 0 THEN used_count - 1 ELSE 0 END
+                 WHERE id = ?`,
+                [orderMetaRows[0].discount_code_id]
+            );
+        }
 
         await connection.commit();
         return result.affectedRows > 0;
