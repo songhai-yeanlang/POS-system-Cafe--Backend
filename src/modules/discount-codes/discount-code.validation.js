@@ -127,7 +127,8 @@ const validateDiscountCodeSchema = {
         subtotal: Joi.number().min(0).optional().messages({
             'number.base': 'Order subtotal must be a number',
             'number.min': 'Order subtotal cannot be negative'
-        })
+        }),
+        order_id: Joi.number().integer().positive().allow(null).optional()
     })
 };
 

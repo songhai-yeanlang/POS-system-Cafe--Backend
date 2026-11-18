@@ -277,7 +277,7 @@ const deleteDiscountCode = async ({ id, user, ipAddress }) => {
     return existing;
 };
 
-const validateAndPreviewDiscountCode = async ({ code, subtotal }) => {
+const validateAndPreviewDiscountCode = async ({ code, subtotal, orderId = null }) => {
     const cleanCode = String(code || '').trim().toUpperCase();
     const record = await discountCodeModel.findDiscountCodeByCode(cleanCode);
 
@@ -298,7 +298,12 @@ const validateAndPreviewDiscountCode = async ({ code, subtotal }) => {
     }
 
     if (record.is_exhausted) {
-        throw ApiError.badRequest(`Discount code '${record.code}' has reached its maximum usage limit (${record.max_uses})`);
+        const alreadyHeldByOrder = orderId
+            ? await discountCodeModel.isDiscountCodeHeldByOrder(record.id, orderId)
+            : false;
+        if (!alreadyHeldByOrder) {
+            throw ApiError.badRequest(`Discount code '${record.code}' has reached its maximum usage limit (${record.max_uses})`);
+        }
     }
 
     let calculatedDiscountAmount = null;
