@@ -95,7 +95,8 @@ const validateDiscountCode = async (req, res, next) => {
     try {
         const result = await discountCodeService.validateAndPreviewDiscountCode({
             code: req.body.code,
-            subtotal: req.body.subtotal
+            subtotal: req.body.subtotal,
+            orderId: req.body.order_id
         });
 
         res.status(200).json({

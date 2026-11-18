@@ -223,6 +223,15 @@ const countOrdersUsingDiscountCode = async (id, connection = pool) => {
     return Number(rows[0]?.total || 0);
 };
 
+const isDiscountCodeHeldByOrder = async (discountCodeId, orderId, connection = pool) => {
+    if (!discountCodeId || !orderId) return false;
+    const [rows] = await connection.query(
+        `SELECT id FROM orders WHERE id = ? AND discount_code_id = ? AND status = 'OPEN' LIMIT 1`,
+        [orderId, discountCodeId]
+    );
+    return rows.length > 0;
+};
+
 const deleteDiscountCodeById = async (id, connection = pool) => {
     const [result] = await connection.query(
         `DELETE FROM discount_codes WHERE id = ?`,
@@ -263,6 +272,7 @@ module.exports = {
     insertDiscountCode,
     updateDiscountCodeById,
     countOrdersUsingDiscountCode,
+    isDiscountCodeHeldByOrder,
     deleteDiscountCodeById,
     incrementUsedCount,
     decrementUsedCount

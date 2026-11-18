@@ -14,8 +14,8 @@ const validate = require('../../middlewares/validate');
 
 
 router.post('/discount-codes/validate', authenticate, validate(validateDiscountCodeSchema), discountCodeController.validateDiscountCode);
-router.get('/discount-codes', authenticate, validate(getDiscountCodesQuerySchema), discountCodeController.getAllDiscountCodes);
-router.get('/discount-codes/:id', authenticate, validate(getDiscountCodeByIdSchema), discountCodeController.getDiscountCodeById);
+router.get('/discount-codes', authenticate, authorize('OWNER'), validate(getDiscountCodesQuerySchema), discountCodeController.getAllDiscountCodes);
+router.get('/discount-codes/:id', authenticate, authorize('OWNER'), validate(getDiscountCodeByIdSchema), discountCodeController.getDiscountCodeById);
 router.post('/discount-codes',authenticate,authorize('OWNER'),validate(createDiscountCodeSchema),discountCodeController.createDiscountCode);
 router.put('/discount-codes/:id',authenticate,authorize('OWNER'), validate(updateDiscountCodeSchema), discountCodeController.updateDiscountCode);
 router.delete('/discount-codes/:id', authenticate, authorize('OWNER'), validate(deleteDiscountCodeSchema), discountCodeController.deleteDiscountCode);
