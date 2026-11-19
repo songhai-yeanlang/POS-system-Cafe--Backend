@@ -288,7 +288,7 @@ const getShopSettings = async (connection = pool) => {
 
 const getOrderItemsForRecipeDeduction = async (orderId, connection = pool) => {
     const [items] = await connection.query(
-        `SELECT id, variant_id, quantity FROM order_items WHERE order_id = ?`,
+        `SELECT id, variant_id, quantity, sugar_level FROM order_items WHERE order_id = ?`,
         [orderId]
     );
 
@@ -312,12 +312,14 @@ const getRecipesForVariants = async (variantIds = [], connection = pool) => {
             r.variant_id,
             r.ingredient_id,
             CAST(r.quantity AS DOUBLE) AS recipe_quantity,
+            r.scale_by_sugar,
             i.name AS ingredient_name,
             i.unit,
             CAST(i.current_stock AS DOUBLE) AS current_stock
          FROM recipes r
          JOIN ingredients i ON i.id = r.ingredient_id
-         WHERE r.variant_id IN (?)`,
+         WHERE r.variant_id IN (?)
+           AND i.is_active = TRUE`,
         [variantIds]
     );
     return rows;
@@ -416,6 +418,7 @@ const insertStockMovement = async ({
     ingredientId,
     orderId,
     quantityChange,
+    reason = null,
     idempotencyKey,
     createdBy
 }, connection = pool) => {
@@ -425,10 +428,11 @@ const insertStockMovement = async ({
             order_id,
             movement_type,
             quantity_change,
+            reason,
             idempotency_key,
             created_by
-        ) VALUES (?, ?, 'SALE', ?, ?, ?)`,
-        [ingredientId, orderId, quantityChange, idempotencyKey, createdBy]
+        ) VALUES (?, ?, 'SALE', ?, ?, ?, ?)`,
+        [ingredientId, orderId, quantityChange, reason, idempotencyKey, createdBy]
     );
     return result.insertId;
 };

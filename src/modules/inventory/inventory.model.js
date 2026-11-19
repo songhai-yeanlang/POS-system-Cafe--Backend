@@ -521,7 +521,8 @@ const findVariantDetailsById = async (variantId, connection = pool) => {
             CAST(pv.price AS DOUBLE) AS price,
             pv.is_active AS variant_is_active,
             p.id AS product_id,
-            p.name AS product_name
+            p.name AS product_name,
+            p.product_type
         FROM product_variants pv
         JOIN products p ON p.id = pv.product_id
         WHERE pv.id = ?
@@ -540,6 +541,7 @@ const findRecipesByVariantId = async (variantId, connection = pool) => {
             i.name AS ingredient_name,
             i.unit AS ingredient_unit,
             CAST(r.quantity AS DOUBLE) AS quantity,
+            r.scale_by_sugar,
             CAST(i.current_stock AS DOUBLE) AS current_stock,
             i.is_active AS ingredient_is_active,
             r.created_at,
@@ -564,7 +566,7 @@ const deleteRecipesByVariantId = async (variantId, connection = pool) => {
 const insertRecipes = async (recipeRows, connection = pool) => {
     if (!recipeRows || recipeRows.length === 0) return 0;
     const [result] = await connection.query(
-        `INSERT INTO recipes (variant_id, ingredient_id, quantity) VALUES ?`,
+        `INSERT INTO recipes (variant_id, ingredient_id, quantity, scale_by_sugar) VALUES ?`,
         [recipeRows]
     );
     return result.affectedRows;
@@ -584,6 +586,7 @@ const findRecipesByProductId = async (productId, connection = pool) => {
             i.name AS ingredient_name,
             i.unit AS ingredient_unit,
             CAST(r.quantity AS DOUBLE) AS quantity,
+            r.scale_by_sugar,
             CAST(i.current_stock AS DOUBLE) AS current_stock,
             i.is_active AS ingredient_is_active
          FROM product_variants pv
@@ -609,6 +612,7 @@ const findAllRecipes = async ({ search, variantId, ingredientId, limit, offset }
             i.name AS ingredient_name,
             i.unit AS ingredient_unit,
             CAST(r.quantity AS DOUBLE) AS quantity,
+            r.scale_by_sugar,
             CAST(i.current_stock AS DOUBLE) AS current_stock,
             r.created_at,
             r.updated_at

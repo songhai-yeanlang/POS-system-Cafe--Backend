@@ -563,6 +563,7 @@ const getRecipeByVariantId = async (variantId) => {
         ingredient_name: r.ingredient_name,
         unit: r.ingredient_unit,
         quantity: r.quantity,
+        scale_by_sugar: Boolean(r.scale_by_sugar),
         current_stock: r.current_stock,
         is_active: Boolean(r.ingredient_is_active),
         created_at: r.created_at,
@@ -627,10 +628,12 @@ const updateRecipeByVariantId = async ({ variantId, items, updaterId, ipAddress 
 
         // 3b. Insert new recipe items if provided
         if (items && items.length > 0) {
+            const isDrinkVariant = variant.product_type === 'DRINK';
             const recipeRows = items.map((item) => [
                 variantId,
                 item.ingredient_id,
-                item.quantity
+                item.quantity,
+                isDrinkVariant ? Boolean(item.scale_by_sugar) : false
             ]);
             await inventoryModel.insertRecipes(recipeRows, connection);
         }
@@ -722,6 +725,7 @@ const getRecipeByProductId = async (productId) => {
                 ingredient_name: row.ingredient_name,
                 unit: row.ingredient_unit,
                 quantity: row.quantity,
+                scale_by_sugar: Boolean(row.scale_by_sugar),
                 current_stock: row.current_stock,
                 is_active: Boolean(row.ingredient_is_active)
             });
@@ -751,7 +755,10 @@ const getAllRecipes = async (queryParams = {}) => {
     ]);
 
     return {
-        recipes,
+        recipes: recipes.map((r) => ({
+            ...r,
+            scale_by_sugar: Boolean(r.scale_by_sugar)
+        })),
         pagination: {
             page,
             limit,

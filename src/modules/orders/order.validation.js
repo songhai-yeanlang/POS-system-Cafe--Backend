@@ -36,9 +36,9 @@ const createOrderSchema = {
                     'any.required': 'Quantity is required for each item',
                     'number.min': 'Quantity must be at least 1'
                 }),
-                sugar_level: Joi.number().integer().min(0).max(100).allow(null).optional().messages({
+                sugar_level: Joi.number().integer().min(0).max(150).allow(null).optional().messages({
                     'number.min': 'Sugar level cannot be less than 0%',
-                    'number.max': 'Sugar level cannot exceed 100%'
+                    'number.max': 'Sugar level cannot exceed 150%'
                 }),
                 ice_level: Joi.string().valid('NONE', 'LESS', 'NORMAL', 'EXTRA').allow(null).optional().messages({
                     'any.only': 'Ice level must be NONE, LESS, NORMAL, or EXTRA'
@@ -127,9 +127,9 @@ const updateOrderSchema = {
                     'any.required': 'Quantity is required for each item',
                     'number.min': 'Quantity must be at least 1'
                 }),
-                sugar_level: Joi.number().integer().min(0).max(100).allow(null).optional().messages({
+                sugar_level: Joi.number().integer().min(0).max(150).allow(null).optional().messages({
                     'number.min': 'Sugar level cannot be less than 0%',
-                    'number.max': 'Sugar level cannot exceed 100%'
+                    'number.max': 'Sugar level cannot exceed 150%'
                 }),
                 ice_level: Joi.string().valid('NONE', 'LESS', 'NORMAL', 'EXTRA').allow(null).optional().messages({
                     'any.only': 'Ice level must be NONE, LESS, NORMAL, or EXTRA'

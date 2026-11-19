@@ -189,14 +189,21 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
                 const itemRecipes = recipesByVariant[item.variant_id] || [];
                 for (let j = 0; j < itemRecipes.length; j++) {
                     const rec = itemRecipes[j];
-                    const usedQty = Number((item.quantity * rec.recipe_quantity).toFixed(4));
+                    const isSugarScaled =
+                        Boolean(rec.scale_by_sugar) &&
+                        item.sugar_level !== null &&
+                        item.sugar_level !== undefined;
+                    const sugarFactor = isSugarScaled ? Number(item.sugar_level) / 100 : 1;
+                    const usedQty = Number((item.quantity * rec.recipe_quantity * sugarFactor).toFixed(4));
                     if (usedQty <= 0) continue;
 
                     const movementKey = buildStockMovementKey(idempotencyKey, `item-${item.id}-${rec.recipe_id}`);
+                    const movementReason = isSugarScaled ? `Sugar ${item.sugar_level}%` : null;
                     plannedMovements.push({
                         ingredientId: Number(rec.ingredient_id),
                         usedQty,
-                        movementKey
+                        movementKey,
+                        reason: movementReason
                     });
 
                     const ingId = Number(rec.ingredient_id);
@@ -302,6 +309,7 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
                 ingredientId: mov.ingredientId,
                 orderId: order.id,
                 quantityChange: -mov.usedQty,
+                reason: mov.reason || null,
                 idempotencyKey: mov.movementKey,
                 createdBy: user.id
             }, connection);

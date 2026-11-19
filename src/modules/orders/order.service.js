@@ -95,6 +95,81 @@ const prepareOrderItemsAndSubtotal = async (items = []) => {
         });
     }
 
+    // Verify sufficient active ingredient stock before allowing order creation or update
+    if (allVariantIds.length > 0) {
+        const recipes = await orderModel.getRecipesForVariants(allVariantIds);
+        if (recipes.length > 0) {
+            const recipesByVariant = {};
+            for (const r of recipes) {
+                if (!recipesByVariant[r.variant_id]) {
+                    recipesByVariant[r.variant_id] = [];
+                }
+                recipesByVariant[r.variant_id].push(r);
+            }
+
+            const requiredByIngredient = new Map();
+
+            for (const item of preparedItems) {
+                const itemRecipes = recipesByVariant[item.variant_id] || [];
+                for (const rec of itemRecipes) {
+                    const isSugarScaled =
+                        Boolean(rec.scale_by_sugar) &&
+                        item.sugar_level !== null &&
+                        item.sugar_level !== undefined;
+                    const sugarFactor = isSugarScaled ? Number(item.sugar_level) / 100 : 1;
+                    const usedQty = Number((item.quantity * rec.recipe_quantity * sugarFactor).toFixed(4));
+                    if (usedQty <= 0) continue;
+
+                    const ingId = Number(rec.ingredient_id);
+                    const prev = requiredByIngredient.get(ingId) || {
+                        ingredientId: ingId,
+                        name: rec.ingredient_name,
+                        unit: rec.unit,
+                        currentStock: Number(rec.current_stock),
+                        totalRequired: 0
+                    };
+                    prev.totalRequired = Number((prev.totalRequired + usedQty).toFixed(4));
+                    requiredByIngredient.set(ingId, prev);
+                }
+
+                for (const addon of item.addons || []) {
+                    const addonRecipes = recipesByVariant[addon.addon_variant_id] || [];
+                    for (const rec of addonRecipes) {
+                        const usedQty = Number((addon.quantity * rec.recipe_quantity).toFixed(4));
+                        if (usedQty <= 0) continue;
+
+                        const ingId = Number(rec.ingredient_id);
+                        const prev = requiredByIngredient.get(ingId) || {
+                            ingredientId: ingId,
+                            name: rec.ingredient_name,
+                            unit: rec.unit,
+                            currentStock: Number(rec.current_stock),
+                            totalRequired: 0
+                        };
+                        prev.totalRequired = Number((prev.totalRequired + usedQty).toFixed(4));
+                        requiredByIngredient.set(ingId, prev);
+                    }
+                }
+            }
+
+            const shortages = [];
+            for (const [, reqInfo] of requiredByIngredient.entries()) {
+                const remainingStock = Number((reqInfo.currentStock - reqInfo.totalRequired).toFixed(4));
+                if (remainingStock < 0) {
+                    shortages.push(
+                        `'${reqInfo.name}' (available: ${reqInfo.currentStock} ${reqInfo.unit}, required: ${reqInfo.totalRequired} ${reqInfo.unit})`
+                    );
+                }
+            }
+
+            if (shortages.length > 0) {
+                throw ApiError.badRequest(
+                    `Insufficient ingredient stock for order: ${shortages.join('; ')}`
+                );
+            }
+        }
+    }
+
     subtotal = Number(subtotal.toFixed(2));
     return { subtotal, preparedItems };
 };

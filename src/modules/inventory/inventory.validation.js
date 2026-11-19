@@ -202,7 +202,8 @@ const updateRecipeByVariantIdSchema = {
                     'number.base': 'Quantity must be a number',
                     'number.positive': 'Quantity must be greater than 0',
                     'any.required': 'Quantity is required'
-                })
+                }),
+                scale_by_sugar: Joi.boolean().truthy('1', 'true', 1).falsy('0', 'false', 0).optional().default(false)
             })
         ).required().messages({
             'array.base': 'Items must be an array',
