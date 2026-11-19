@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   variant_id BIGINT UNSIGNED NOT NULL,
   ingredient_id BIGINT UNSIGNED NOT NULL,
   quantity DECIMAL(14,4) NOT NULL,
+  scale_by_sugar BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ON UPDATE CURRENT_TIMESTAMP,
@@ -472,7 +473,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     CHECK (quantity > 0 AND unit_price >= 0),
 
   CONSTRAINT chk_order_items_sugar
-    CHECK (sugar_level IS NULL OR sugar_level <= 100)
+    CHECK (sugar_level IS NULL OR sugar_level <= 150)
 ) ENGINE=InnoDB;
 
 

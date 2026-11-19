@@ -60,6 +60,28 @@ const getVariantsDetailsByIds = async (variantIds = [], connection = pool) => {
     return rows;
 };
 
+const getRecipesForVariants = async (variantIds = [], connection = pool) => {
+    if (!variantIds.length) return [];
+
+    const [rows] = await connection.query(
+        `SELECT 
+            r.id AS recipe_id,
+            r.variant_id,
+            r.ingredient_id,
+            CAST(r.quantity AS DOUBLE) AS recipe_quantity,
+            r.scale_by_sugar,
+            i.name AS ingredient_name,
+            i.unit,
+            CAST(i.current_stock AS DOUBLE) AS current_stock
+         FROM recipes r
+         JOIN ingredients i ON i.id = r.ingredient_id
+         WHERE r.variant_id IN (?)
+           AND i.is_active = TRUE`,
+        [variantIds]
+    );
+    return rows;
+};
+
 const findUserRoleById = async (userId, connection = pool) => {
     const [rows] = await connection.query(
         `SELECT id, name, role, is_active, password_hash FROM users WHERE id = ? LIMIT 1`,
@@ -660,6 +682,7 @@ module.exports = {
     generateReceiptNo,
     getNextQueueNo,
     getVariantsDetailsByIds,
+    getRecipesForVariants,
     findUserRoleById,
     findAllActiveOwners,
     insertOrder,
