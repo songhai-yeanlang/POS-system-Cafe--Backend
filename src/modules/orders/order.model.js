@@ -275,6 +275,7 @@ const findOrderById = async (orderId, connection = pool) => {
             CAST(o.subtotal AS DOUBLE) AS subtotal,
             o.discount_code_id,
             dc.code AS discount_code,
+            dc.name AS discount_code_name,
             o.discount_type,
             CAST(o.discount_value AS DOUBLE) AS discount_value,
             CAST(o.discount_amount AS DOUBLE) AS discount_amount,
@@ -416,6 +417,7 @@ const findOrderById = async (orderId, connection = pool) => {
         discount: {
             code_id: order.discount_code_id || null,
             code: order.discount_code || null,
+            name: order.discount_code_name || null,
             type: order.discount_type,
             value: order.discount_value,
             amount: order.discount_amount,
@@ -468,6 +470,7 @@ const findAllOrders = async ({
             CAST(o.subtotal AS DOUBLE) AS subtotal,
             o.discount_code_id,
             dc.code AS discount_code,
+            dc.name AS discount_code_name,
             o.discount_type,
             CAST(o.discount_value AS DOUBLE) AS discount_value,
             CAST(o.discount_amount AS DOUBLE) AS discount_amount,
