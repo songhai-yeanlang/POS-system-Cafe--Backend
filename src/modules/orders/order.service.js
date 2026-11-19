@@ -132,23 +132,28 @@ const calculateAndValidateDiscount = async (
             );
         }
 
-        if (!codeRecord.is_active) {
-            throw ApiError.badRequest(`Discount code '${codeRecord.code}' is currently inactive`);
-        }
+        const isSameExistingCode = Boolean(existingCodeId) && Number(existingCodeId) === Number(codeRecord.id);
 
-        if (codeRecord.is_not_started) {
-            throw ApiError.badRequest(`Discount code '${codeRecord.code}' is not active yet`);
-        }
+        // Only enforce active/schedule/expiry/usage-limit checks for NEW usages
+        // (an existing OPEN order already reserved its slot when first applied)
+        if (!isSameExistingCode) {
+            if (!codeRecord.is_active) {
+                throw ApiError.badRequest(`Discount code '${codeRecord.code}' is currently inactive`);
+            }
 
-        if (codeRecord.is_expired) {
-            throw ApiError.badRequest(`Discount code '${codeRecord.code}' has expired`);
-        }
+            if (codeRecord.is_not_started) {
+                throw ApiError.badRequest(`Discount code '${codeRecord.code}' is not active yet`);
+            }
 
-        // Only block on is_exhausted if this is a NEW usage (not re-validating an existing order already holding this code)
-        if (codeRecord.is_exhausted && Number(existingCodeId) !== Number(codeRecord.id)) {
-            throw ApiError.badRequest(
-                `Discount code '${codeRecord.code}' has reached its maximum usage limit (${codeRecord.max_uses})`
-            );
+            if (codeRecord.is_expired) {
+                throw ApiError.badRequest(`Discount code '${codeRecord.code}' has expired`);
+            }
+
+            if (codeRecord.is_exhausted) {
+                throw ApiError.badRequest(
+                    `Discount code '${codeRecord.code}' has reached its maximum usage limit (${codeRecord.max_uses})`
+                );
+            }
         }
 
         if (subtotal < codeRecord.min_order_amount) {
@@ -441,6 +446,7 @@ const getAllOrders = async ({ queryParams = {} }) => {
         discount: {
             code_id: o.discount_code_id || null,
             code: o.discount_code || null,
+            name: o.discount_code_name || null,
             type: o.discount_type,
             value: o.discount_value,
             amount: o.discount_amount

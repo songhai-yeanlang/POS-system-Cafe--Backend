@@ -285,23 +285,24 @@ const validateAndPreviewDiscountCode = async ({ code, subtotal, orderId = null }
         throw ApiError.notFound(`Discount code '${cleanCode}' does not exist`);
     }
 
-    if (!record.is_active) {
-        throw ApiError.badRequest(`Discount code '${record.code}' is currently inactive`);
-    }
+    const alreadyHeldByOrder = orderId
+        ? await discountCodeModel.isDiscountCodeHeldByOrder(record.id, orderId)
+        : false;
 
-    if (record.is_not_started) {
-        throw ApiError.badRequest(`Discount code '${record.code}' is not active until ${new Date(record.starts_at).toISOString()}`);
-    }
+    if (!alreadyHeldByOrder) {
+        if (!record.is_active) {
+            throw ApiError.badRequest(`Discount code '${record.code}' is currently inactive`);
+        }
 
-    if (record.is_expired) {
-        throw ApiError.badRequest(`Discount code '${record.code}' has expired`);
-    }
+        if (record.is_not_started) {
+            throw ApiError.badRequest(`Discount code '${record.code}' is not active until ${new Date(record.starts_at).toISOString()}`);
+        }
 
-    if (record.is_exhausted) {
-        const alreadyHeldByOrder = orderId
-            ? await discountCodeModel.isDiscountCodeHeldByOrder(record.id, orderId)
-            : false;
-        if (!alreadyHeldByOrder) {
+        if (record.is_expired) {
+            throw ApiError.badRequest(`Discount code '${record.code}' has expired`);
+        }
+
+        if (record.is_exhausted) {
             throw ApiError.badRequest(`Discount code '${record.code}' has reached its maximum usage limit (${record.max_uses})`);
         }
     }
