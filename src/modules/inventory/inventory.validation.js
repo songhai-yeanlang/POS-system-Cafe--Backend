@@ -198,9 +198,9 @@ const updateRecipeByVariantIdSchema = {
                     'number.positive': 'Ingredient ID must be a positive number',
                     'any.required': 'Ingredient ID is required'
                 }),
-                quantity: Joi.number().positive().required().messages({
+                quantity: Joi.number().min(0.0001).required().messages({
                     'number.base': 'Quantity must be a number',
-                    'number.positive': 'Quantity must be greater than 0',
+                    'number.min': 'Quantity must be at least 0.0001',
                     'any.required': 'Quantity is required'
                 }),
                 scale_by_sugar: Joi.boolean().truthy('1', 'true', 1).falsy('0', 'false', 0).optional().default(false)

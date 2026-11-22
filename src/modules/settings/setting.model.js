@@ -1,4 +1,5 @@
 const { connection: pool } = require('../../config/db.config');
+const ApiError = require('../../utils/api-error');
 
 /**
  * Pure SQL: Fetch settings singleton row (id = 1)
@@ -84,6 +85,23 @@ const clearSystemData = async (targets = ['ALL']) => {
     let removedProductImages = [];
 
     try {
+        // Prevent clearing products/categories while OPEN orders exist if ORDERS are not also being cleared
+        if (
+            (targetSet.has('PRODUCTS') || targetSet.has('CATEGORIES')) &&
+            !isAll &&
+            !targetSet.has('ORDERS') &&
+            !targetSet.has('SHIFTS')
+        ) {
+            const [openOrderRows] = await connection.query(
+                "SELECT COUNT(*) AS total FROM orders WHERE status = 'OPEN'"
+            );
+            if (Number(openOrderRows[0]?.total || 0) > 0) {
+                throw ApiError.badRequest(
+                    'Cannot clear products or categories while there are open/unpaid orders. Please complete, cancel, or clear orders first.'
+                );
+            }
+        }
+
         await connection.query('SET FOREIGN_KEY_CHECKS = 0');
 
         // Collect product images before clearing products so files can be removed from disk
@@ -103,9 +121,23 @@ const clearSystemData = async (targets = ['ALL']) => {
             await connection.query('TRUNCATE TABLE orders');
             clearedTables.push('refunds', 'payments', 'order_item_addons', 'order_items', 'orders');
 
+            // Reset discount_codes.used_count to 0 since all orders were cleared
+            if (!isAll && !targetSet.has('DISCOUNT_CODES')) {
+                await connection.query('UPDATE discount_codes SET used_count = 0');
+            }
+
             if (!isAll && !targetSet.has('INVENTORY') && !targetSet.has('STOCK_MOVEMENTS')) {
                 await connection.query('DELETE FROM stock_movements WHERE order_id IS NOT NULL');
             }
+        }
+
+        // 1b. Discount Codes
+        if (isAll || targetSet.has('DISCOUNT_CODES')) {
+            if (!isAll && !targetSet.has('ORDERS') && !targetSet.has('SHIFTS')) {
+                await connection.query('UPDATE orders SET discount_code_id = NULL WHERE discount_code_id IS NOT NULL');
+            }
+            await connection.query('TRUNCATE TABLE discount_codes');
+            clearedTables.push('discount_codes');
         }
 
         // 2. Expenses

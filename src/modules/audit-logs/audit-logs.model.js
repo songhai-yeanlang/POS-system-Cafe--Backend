@@ -1,6 +1,6 @@
 const { connection: pool } = require('../../config/db.config');
 
-const findAuditLogs = async ({ userId, action, tableName, startDate, endDate, limit, offset }) => {
+const findAuditLogs = async ({ userId, action, tableName, search, startDate, endDate, limit, offset }) => {
     let sql = `
         SELECT 
             al.id,
@@ -32,6 +32,20 @@ const findAuditLogs = async ({ userId, action, tableName, startDate, endDate, li
         sql += ` AND al.table_name = ?`;
         params.push(tableName);
     }
+    if (search) {
+        sql += ` AND (
+            CAST(al.id AS CHAR) LIKE ? OR
+            CAST(al.record_id AS CHAR) LIKE ? OR
+            u.name LIKE ? OR
+            u.email LIKE ? OR
+            al.action LIKE ? OR
+            al.table_name LIKE ? OR
+            al.ip_address LIKE ? OR
+            CAST(al.details AS CHAR) LIKE ?
+        )`;
+        const likeTerm = `%${search}%`;
+        params.push(likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm);
+    }
     if (startDate) {
         sql += ` AND al.created_at >= ?`;
         params.push(startDate);
@@ -48,10 +62,11 @@ const findAuditLogs = async ({ userId, action, tableName, startDate, endDate, li
     return rows;
 };
 
-const countAuditLogs = async ({ userId, action, tableName, startDate, endDate }) => {
+const countAuditLogs = async ({ userId, action, tableName, search, startDate, endDate }) => {
     let sql = `
         SELECT COUNT(*) AS total
         FROM audit_logs al
+        LEFT JOIN users u ON al.user_id = u.id
         WHERE 1=1
     `;
     const params = [];
@@ -67,6 +82,20 @@ const countAuditLogs = async ({ userId, action, tableName, startDate, endDate })
     if (tableName) {
         sql += ` AND al.table_name = ?`;
         params.push(tableName);
+    }
+    if (search) {
+        sql += ` AND (
+            CAST(al.id AS CHAR) LIKE ? OR
+            CAST(al.record_id AS CHAR) LIKE ? OR
+            u.name LIKE ? OR
+            u.email LIKE ? OR
+            al.action LIKE ? OR
+            al.table_name LIKE ? OR
+            al.ip_address LIKE ? OR
+            CAST(al.details AS CHAR) LIKE ?
+        )`;
+        const likeTerm = `%${search}%`;
+        params.push(likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm);
     }
     if (startDate) {
         sql += ` AND al.created_at >= ?`;

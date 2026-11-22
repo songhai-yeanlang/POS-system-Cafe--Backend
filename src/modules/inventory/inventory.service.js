@@ -398,11 +398,15 @@ const getStockMovements = async (queryParams = {}) => {
 
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            // Set to end of the day 23:59:59.999
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                // Set to end of the day 23:59:59.999
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 
@@ -457,12 +461,16 @@ const createStockMovement = async ({
         }
     }
 
-    // 2. Determine quantity_change based on movement_type
-    let quantity_change = Number(quantity);
+    // 2. Determine quantity_change based on movement_type (rounded to 4 decimal places to match DECIMAL(10, 4))
+    let quantity_change = Number(Number(quantity).toFixed(4));
     if (movement_type === 'PURCHASE') {
         quantity_change = Math.abs(quantity_change);
     } else if (movement_type === 'WASTE') {
         quantity_change = -Math.abs(quantity_change);
+    }
+
+    if (!Number.isFinite(quantity_change) || quantity_change === 0) {
+        throw ApiError.badRequest('Quantity change is too small; must be at least 0.0001');
     }
 
     // 3. Execute in database transaction with pessimistic row lock
@@ -485,7 +493,7 @@ const createStockMovement = async ({
 
         // 3b. Verify resulting stock will not be negative under lock
         const currentStock = Number(ingredient.current_stock);
-        const newStock = currentStock + quantity_change;
+        const newStock = Number((currentStock + quantity_change).toFixed(4));
         if (newStock < 0) {
             throw ApiError.badRequest(
                 `Insufficient stock for '${ingredient.name}'. Current stock is ${currentStock} ${ingredient.unit}, attempting to deduct ${Math.abs(quantity_change)} ${ingredient.unit}.`
@@ -629,12 +637,18 @@ const updateRecipeByVariantId = async ({ variantId, items, updaterId, ipAddress 
         // 3b. Insert new recipe items if provided
         if (items && items.length > 0) {
             const isDrinkVariant = variant.product_type === 'DRINK';
-            const recipeRows = items.map((item) => [
-                variantId,
-                item.ingredient_id,
-                item.quantity,
-                isDrinkVariant ? Boolean(item.scale_by_sugar) : false
-            ]);
+            const recipeRows = items.map((item) => {
+                const roundedQty = Number(Number(item.quantity).toFixed(4));
+                if (!Number.isFinite(roundedQty) || roundedQty <= 0) {
+                    throw ApiError.badRequest('Quantity must be at least 0.0001');
+                }
+                return [
+                    variantId,
+                    item.ingredient_id,
+                    roundedQty,
+                    isDrinkVariant ? Boolean(item.scale_by_sugar) : false
+                ];
+            });
             await inventoryModel.insertRecipes(recipeRows, connection);
         }
 

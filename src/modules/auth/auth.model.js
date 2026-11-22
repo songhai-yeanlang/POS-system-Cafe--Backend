@@ -101,11 +101,22 @@ const deleteExpiredRefreshTokens = async () => {
 
 // ==================== PASSWORD RESETS ====================
 
-const invalidatePreviousResets = async (userId) => {
-    await pool.query(
-        'UPDATE password_resets SET is_used = TRUE WHERE user_id = ? AND is_used = FALSE',
-        [userId]
-    );
+const invalidatePreviousResets = async (userId, excludeId = null) => {
+    if (excludeId) {
+        await pool.query(
+            'UPDATE password_resets SET is_used = TRUE WHERE user_id = ? AND is_used = FALSE AND id != ?',
+            [userId, excludeId]
+        );
+    } else {
+        await pool.query(
+            'UPDATE password_resets SET is_used = TRUE WHERE user_id = ? AND is_used = FALSE',
+            [userId]
+        );
+    }
+};
+
+const deletePasswordResetById = async (id) => {
+    await pool.query('DELETE FROM password_resets WHERE id = ?', [id]);
 };
 
 const createPasswordReset = async ({ userId, email, otpHash, expiryMinutes = 10 }) => {
@@ -122,7 +133,20 @@ const findActiveResetByEmail = async (email) => {
         `SELECT id, user_id, email, otp_hash, reset_token, attempts, expires_at, is_used, created_at,
                 TIMESTAMPDIFF(SECOND, created_at, NOW()) AS seconds_since_created
          FROM password_resets
-         WHERE email = ? AND is_used = FALSE AND expires_at > NOW()
+         WHERE email = ? AND is_used = FALSE AND reset_token IS NULL AND expires_at > NOW()
+         ORDER BY id DESC
+         LIMIT 1`,
+        [email]
+    );
+    return rows[0] || null;
+};
+
+const findLatestResetByEmail = async (email) => {
+    const [rows] = await pool.query(
+        `SELECT id, user_id, email, created_at,
+                TIMESTAMPDIFF(SECOND, created_at, NOW()) AS seconds_since_created
+         FROM password_resets
+         WHERE email = ?
          ORDER BY id DESC
          LIMIT 1`,
         [email]
@@ -138,11 +162,12 @@ const incrementResetAttempts = async (id) => {
 };
 
 const saveResetToken = async (id, resetToken) => {
-    // Refresh expires_at to 15 minutes from now for password reset step
-    await pool.query(
-        'UPDATE password_resets SET reset_token = ?, expires_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE) WHERE id = ?',
+    // Refresh expires_at to 15 minutes from now for password reset step (atomic single-use OTP check)
+    const [result] = await pool.query(
+        'UPDATE password_resets SET reset_token = ?, expires_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE) WHERE id = ? AND is_used = FALSE AND reset_token IS NULL',
         [resetToken, id]
     );
+    return result.affectedRows > 0;
 };
 
 const findResetByToken = async (resetToken) => {
@@ -176,8 +201,10 @@ module.exports = {
     revokeAllUserRefreshTokens,
     deleteExpiredRefreshTokens,
     invalidatePreviousResets,
+    deletePasswordResetById,
     createPasswordReset,
     findActiveResetByEmail,
+    findLatestResetByEmail,
     incrementResetAttempts,
     saveResetToken,
     findResetByToken,

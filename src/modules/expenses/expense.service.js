@@ -134,10 +134,14 @@ const getAllExpenses = async ({ queryParams = {} }) => {
 
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 
@@ -208,7 +212,10 @@ const updateExpense = async ({ id, user, updateData, ipAddress }) => {
         fieldsToUpdate.description = updateData.description.trim();
     }
     if (updateData.incurred_at !== undefined) {
-        fieldsToUpdate.incurredAt = normalizeIncurredAt(updateData.incurred_at);
+        const normalizedIncurredAt = normalizeIncurredAt(updateData.incurred_at);
+        if (normalizedIncurredAt !== null) {
+            fieldsToUpdate.incurredAt = normalizedIncurredAt;
+        }
     }
 
     const nextPaymentMethod = updateData.payment_method || existing.payment_method;
@@ -223,7 +230,13 @@ const updateExpense = async ({ id, user, updateData, ipAddress }) => {
                     throw ApiError.badRequest('Cannot change payment method to CASH on an expense belonging to a closed shift');
                 }
             } else {
-                const activeShift = await shiftModel.findActiveShiftByUserId(user.id);
+                let activeShift = await shiftModel.findActiveShiftByUserId(user.id);
+                if (!activeShift && user.role === 'OWNER') {
+                    const openShifts = await shiftModel.findAllShifts({ status: 'OPEN', limit: 1 });
+                    if (openShifts && openShifts.length > 0) {
+                        activeShift = openShifts[0];
+                    }
+                }
                 if (!activeShift) {
                     throw ApiError.badRequest('Changing to CASH requires an active open shift');
                 }
@@ -333,10 +346,14 @@ const voidExpense = async ({ id, user, voidReason, ipAddress }) => {
 const getExpenseSummary = async ({ queryParams = {} }) => {
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 

@@ -5,6 +5,11 @@ const shiftModel = require('../shifts/shift.model');
 const discountCodeModel = require('../discount-codes/discount-code.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
+const {
+    checkApprovalRateLimit,
+    recordApprovalFailure,
+    clearApprovalFailures
+} = require('../../middlewares/rate-limiter');
 
 /**
  * Helper to validate all items/addons and calculate subtotal
@@ -181,7 +186,7 @@ const calculateAndValidateDiscount = async (
     orderData,
     subtotal,
     currentUser = null,
-    { existingCodeId = null, isRevalidatingExisting = false } = {}
+    { existingCodeId = null, isRevalidatingExisting = false, ipAddress = null, orderId = null } = {}
 ) => {
     let discountCodeId = null;
     let discountType = orderData.discount_type || 'NONE';
@@ -240,7 +245,24 @@ const calculateAndValidateDiscount = async (
         discountCodeId = codeRecord.id;
         discountType = codeRecord.discount_type;
         discountValue = Number(codeRecord.discount_value.toFixed(2));
-        discountApprovedBy = codeRecord.created_by?.id || orderData.discount_approved_by;
+
+        let promoApproverId = codeRecord.created_by?.name ? codeRecord.created_by.id : null;
+        if (promoApproverId) {
+            const creatorUser = await orderModel.findUserRoleById(promoApproverId);
+            if (!creatorUser) {
+                promoApproverId = null;
+            }
+        }
+        if (!promoApproverId) {
+            if (currentUser && currentUser.role === 'OWNER') {
+                promoApproverId = currentUser.id;
+            } else {
+                const activeOwners = await orderModel.findAllActiveOwners();
+                promoApproverId = activeOwners[0]?.id || null;
+            }
+        }
+
+        discountApprovedBy = promoApproverId;
         discountReason = orderData.discount_reason && orderData.discount_reason.trim()
             ? orderData.discount_reason.trim()
             : `${codeRecord.code} - ${codeRecord.name}`;
@@ -272,11 +294,17 @@ const calculateAndValidateDiscount = async (
             if (!approver || approver.role !== 'OWNER' || !approver.is_active) {
                 throw ApiError.badRequest('Discount must be approved by an active user with OWNER role');
             }
-        } else if (providedPassword) {
+        } else if (providedPassword && String(providedPassword).trim()) {
+            const rateLimitKey = `discount:${currentUser?.id || ipAddress || 'anon'}`;
+            checkApprovalRateLimit(rateLimitKey);
+
             // Staff provided an OWNER password: find matching active OWNER automatically
             const activeOwners = await orderModel.findAllActiveOwners();
             let matchedOwner = null;
             for (const owner of activeOwners) {
+                if (orderData.discount_approved_by && Number(owner.id) !== Number(orderData.discount_approved_by)) {
+                    continue;
+                }
                 const isMatch = await bcrypt.compare(String(providedPassword), owner.password_hash);
                 if (isMatch) {
                     matchedOwner = owner;
@@ -284,8 +312,27 @@ const calculateAndValidateDiscount = async (
                 }
             }
             if (!matchedOwner) {
+                recordApprovalFailure(rateLimitKey);
+                try {
+                    await auditLogsModel.insertAuditLog({
+                        userId: currentUser?.id || null,
+                        action: 'DISCOUNT_APPROVAL_FAILED',
+                        tableName: 'orders',
+                        recordId: orderId || null,
+                        details: {
+                            discount_type: discountType,
+                            discount_value: discountValue,
+                            subtotal,
+                            reason: 'Invalid OWNER approval password for discount'
+                        },
+                        ipAddress
+                    });
+                } catch (err) {
+                    console.error('Failed to write audit log for failed discount approval:', err.message);
+                }
                 throw ApiError.forbidden('Invalid OWNER approval password for discount');
             }
+            clearApprovalFailures(rateLimitKey);
             approverId = matchedOwner.id;
         } else if (isRevalidatingExisting && approverId) {
             // Re-validating an unchanged previously-approved discount when items/notes are updated
@@ -354,7 +401,7 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
     const { subtotal, preparedItems } = await prepareOrderItemsAndSubtotal(orderData.items);
 
     // 4. Calculate and validate discounts
-    const discount = await calculateAndValidateDiscount(orderData, subtotal, user);
+    const discount = await calculateAndValidateDiscount(orderData, subtotal, user, { ipAddress });
 
     // 5. Execute Transaction
     const connection = await pool.getConnection();
@@ -368,7 +415,10 @@ const createOrder = async ({ user, orderData, ipAddress }) => {
     try {
         // Acquire advisory lock so concurrent orders on the first order of the day never collide on receipt_no or queue_no
         const [lockRows] = await connection.query("SELECT GET_LOCK('coffee_pos_order_seq', 5) AS acquired");
-        hasSeqLock = Boolean(lockRows[0]?.acquired);
+        hasSeqLock = Number(lockRows[0]?.acquired) === 1;
+        if (!hasSeqLock) {
+            throw ApiError.conflict('Server is busy processing another order. Please try again.');
+        }
 
         receiptNo = await orderModel.generateReceiptNo(connection);
         const datePrefix = receiptNo.substring(0, 13); // e.g. "RCP-YYYYMMDD-"
@@ -482,10 +532,14 @@ const getAllOrders = async ({ queryParams = {} }) => {
 
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 
@@ -597,9 +651,10 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
         orderData.discount_code_id !== undefined;
 
     if (isDiscountUpdated) {
-        const hasNewPromoCode =
+        const hasNewPromoCode = Boolean(
             (orderData.discount_code && String(orderData.discount_code).trim()) ||
-            orderData.discount_code_id;
+            orderData.discount_code_id
+        );
 
         if (orderData.discount_type === 'NONE' && !hasNewPromoCode) {
             // Explicitly clearing any existing discount or promo code
@@ -612,17 +667,25 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
                 discountReason: null
             };
         } else {
+            const hadExistingPromoCode = Boolean(existingOrder.discount?.code_id);
             const nextDiscountType = orderData.discount_type !== undefined ? orderData.discount_type : existingOrder.discount.type;
             const nextDiscountValue = orderData.discount_value !== undefined ? Number(orderData.discount_value) : Number(existingOrder.discount.value);
-            const isDiscountChanged =
-                nextDiscountType !== existingOrder.discount.type ||
-                nextDiscountValue !== Number(existingOrder.discount.value) ||
-                Boolean(hasNewPromoCode);
 
-            // Security: If a non-OWNER changes the discount type or value, do NOT silently reuse previous owner's approval
-            const resolvedApprovedBy = orderData.discount_approved_by !== undefined
-                ? orderData.discount_approved_by
-                : (isDiscountChanged && user.role !== 'OWNER' ? null : existingOrder.discount.approved_by?.id);
+            // An existing manual discount can only be revalidated without fresh approval if:
+            // 1) The existing order was already a manual discount (!hadExistingPromoCode)
+            // 2) The updated order is also a manual discount (!hasNewPromoCode)
+            // 3) Neither discount_type nor discount_value changed
+            const isUnchangedManualDiscount =
+                !hadExistingPromoCode &&
+                !hasNewPromoCode &&
+                existingOrder.discount?.type !== 'NONE' &&
+                nextDiscountType === existingOrder.discount?.type &&
+                nextDiscountValue === Number(existingOrder.discount?.value);
+
+            // Security: Never allow a non-OWNER to spoof discount_approved_by or escalate a promo code into an unapproved manual discount
+            const resolvedApprovedBy = user.role === 'OWNER'
+                ? (orderData.discount_approved_by !== undefined ? orderData.discount_approved_by : user.id)
+                : (isUnchangedManualDiscount ? existingOrder.discount?.approved_by?.id : null);
 
             discount = await calculateAndValidateDiscount(
                 {
@@ -639,7 +702,9 @@ const updateOrder = async ({ orderId, user, orderData, ipAddress }) => {
                 user,
                 {
                     existingCodeId: existingOrder.discount?.code_id,
-                    isRevalidatingExisting: !isDiscountChanged
+                    isRevalidatingExisting: isUnchangedManualDiscount,
+                    ipAddress,
+                    orderId
                 }
             );
         }
@@ -867,6 +932,20 @@ const deleteOrder = async ({ orderId, user, ipAddress }) => {
     }
 
     await orderModel.deleteOrderById(orderId);
+
+    const affectedShiftIds = new Set();
+    if (existingOrder.shift_id) {
+        affectedShiftIds.add(Number(existingOrder.shift_id));
+    }
+    if (Array.isArray(existingOrder.payments)) {
+        for (const p of existingOrder.payments) {
+            if (p.shift_id) affectedShiftIds.add(Number(p.shift_id));
+            if (p.refund?.shift_id) affectedShiftIds.add(Number(p.refund.shift_id));
+        }
+    }
+    for (const sId of affectedShiftIds) {
+        await shiftModel.syncClosedShiftExpectedCash(sId);
+    }
 
     try {
         await auditLogsModel.insertAuditLog({

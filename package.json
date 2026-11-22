@@ -11,7 +11,6 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
-    "decimal.js": "^10.6.0",
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
@@ -21,7 +20,6 @@
     "multer": "^2.4.0",
     "mysql2": "^3.24.6",
     "nodemailer": "^10.1.7",
-    "sharp": "^0.35.5",
-    "websocket": "^1.0.35"
+    "sharp": "^0.35.5"
   }
 }

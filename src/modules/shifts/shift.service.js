@@ -52,8 +52,8 @@ const calculateExpectedDrawer = (shift, rawSummary) => {
     const netCashUsd = Math.round((cashUsdIn - cashUsdChange) * 100) / 100;
     const netCashKhr = Math.round((cashKhrIn - cashKhrChange) * 100) / 100;
 
-    const expectedCashUsd = Math.max(0, Math.round((shift.opening_cash_usd + netCashUsd - cashExpensesUsd - cashRefundsUsd) * 100) / 100);
-    const expectedCashKhr = Math.max(0, Math.round((shift.opening_cash_khr + netCashKhr - cashExpensesKhr - cashRefundsKhr) * 100) / 100);
+    const expectedCashUsd = Math.round((shift.opening_cash_usd + netCashUsd - cashExpensesUsd - cashRefundsUsd) * 100) / 100;
+    const expectedCashKhr = Math.round((shift.opening_cash_khr + netCashKhr - cashExpensesKhr - cashRefundsKhr) * 100) / 100;
 
     return {
         cashUsdIn,
@@ -312,10 +312,14 @@ const getAllShifts = async ({ user, queryParams = {} }) => {
     // Handle end_date full day boundary
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 

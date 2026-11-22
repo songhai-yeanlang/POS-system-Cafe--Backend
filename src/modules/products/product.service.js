@@ -5,6 +5,29 @@ const productModel = require('./product.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
 
+const PRODUCTS_UPLOAD_DIR = path.resolve(__dirname, '../../../uploads/products');
+
+const safeRemoveLocalProductImage = (imgPath, excludeFilename = null) => {
+    if (!imgPath || typeof imgPath !== 'string' || !imgPath.startsWith('/uploads/products/')) {
+        return;
+    }
+    const filename = path.basename(imgPath);
+    if (!filename || filename === '.' || filename === '..' || filename === excludeFilename) {
+        return;
+    }
+    const filePath = path.resolve(PRODUCTS_UPLOAD_DIR, filename);
+    if (!filePath.startsWith(PRODUCTS_UPLOAD_DIR + path.sep)) {
+        return;
+    }
+    if (fs.existsSync(filePath)) {
+        try {
+            fs.unlinkSync(filePath);
+        } catch (err) {
+            console.error('Failed to delete product image file from disk:', err.message);
+        }
+    }
+};
+
 
 const getAllCategories = async (queryParams = {}) => {
     return await productModel.findAllCategories({
@@ -118,6 +141,13 @@ const deleteCategory = async ({ id, deleterId, ipAddress }) => {
         throw ApiError.notFound('Category not found');
     }
 
+    const usedInOpenOrders = await productModel.isCategoryUsedInOpenOrders(id);
+    if (usedInOpenOrders) {
+        throw ApiError.badRequest(
+            `Cannot delete category '${category.name}' because its products are currently used in an open/unpaid order. Please complete or cancel the open order first.`
+        );
+    }
+
     const productCount = await productModel.countProductsByCategoryId(id);
 
     // 2. Delete category (and any assigned products, variants, recipes) from database
@@ -126,16 +156,7 @@ const deleteCategory = async ({ id, deleterId, ipAddress }) => {
     // 3. Remove product image files from disk if any products had local images
     if (Array.isArray(removedImages) && removedImages.length > 0) {
         for (const imgPath of removedImages) {
-            if (typeof imgPath === 'string' && imgPath.startsWith('/uploads/')) {
-                const filePath = path.join(__dirname, '../../../', imgPath.replace(/^\/+/, ''));
-                if (fs.existsSync(filePath)) {
-                    try {
-                        fs.unlinkSync(filePath);
-                    } catch (err) {
-                        console.error('Failed to delete product image file during deleteCategory:', err.message);
-                    }
-                }
-            }
+            safeRemoveLocalProductImage(imgPath);
         }
     }
 
@@ -365,19 +386,9 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
         if (
             updateData.image !== undefined &&
             updateData.image !== currentProduct.image &&
-            currentProduct.image &&
-            typeof currentProduct.image === 'string' &&
-            currentProduct.image.startsWith('/uploads/products/')
+            currentProduct.image
         ) {
-            const oldFilename = path.basename(currentProduct.image);
-            const oldFilePath = path.join(__dirname, '../../../uploads/products', oldFilename);
-            if (fs.existsSync(oldFilePath)) {
-                try {
-                    fs.unlinkSync(oldFilePath);
-                } catch (err) {
-                    console.error('Failed to delete old product image in updateProduct:', err.message);
-                }
-            }
+            safeRemoveLocalProductImage(currentProduct.image);
         }
 
         // 5b. Update variants if provided
@@ -433,6 +444,12 @@ const updateProduct = async ({ id, updateData, updaterId, ipAddress }) => {
             // Check variants that were in DB but not present in updateData.variants
             for (const existingV of existingVariants) {
                 if (!updatedVariantIds.has(existingV.id)) {
+                    const variantInOpenOrder = await productModel.isVariantUsedInOpenOrders(existingV.id, connection);
+                    if (variantInOpenOrder) {
+                        throw ApiError.badRequest(
+                            `Cannot remove variant '${existingV.name}' because it is currently used in an open/unpaid order. Please complete or cancel the open order first.`
+                        );
+                    }
                     await productModel.deleteVariantById(existingV.id, connection);
                 }
             }
@@ -477,20 +494,18 @@ const deleteProduct = async ({ id, deleterId, ipAddress }) => {
         throw ApiError.notFound('Product not found');
     }
 
+    const usedInOpenOrders = await productModel.isProductUsedInOpenOrders(id);
+    if (usedInOpenOrders) {
+        throw ApiError.badRequest(
+            `Cannot delete product '${product.name}' because it is currently used in an open/unpaid order. Please complete or cancel the open order first.`
+        );
+    }
+
     // 2. Delete product, its variants, and its recipes from database
     await productModel.deleteProductById(id);
 
     // 3. Remove image file from disk if stored locally
-    if (product.image && typeof product.image === 'string' && product.image.startsWith('/uploads/')) {
-        const filePath = path.join(__dirname, '../../../', product.image.replace(/^\/+/, ''));
-        if (fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch (err) {
-                console.error('Failed to delete product image file from disk:', err.message);
-            }
-        }
-    }
+    safeRemoveLocalProductImage(product.image);
 
     // 4. Record audit log
     try {
@@ -523,17 +538,7 @@ const updateProductImage = async ({ id, imageFilename, updaterId, ipAddress }) =
     const relativeImagePath = `/uploads/products/${imageFilename}`;
 
     // 2. Remove old product image if it was saved locally in /uploads/products/
-    if (product.image && typeof product.image === 'string' && product.image.startsWith('/uploads/products/')) {
-        const oldFilename = path.basename(product.image);
-        const oldFilePath = path.join(__dirname, '../../../uploads/products', oldFilename);
-        if (fs.existsSync(oldFilePath) && oldFilename !== imageFilename) {
-            try {
-                fs.unlinkSync(oldFilePath);
-            } catch (err) {
-                console.error('Failed to delete old product image:', err.message);
-            }
-        }
-    }
+    safeRemoveLocalProductImage(product.image, imageFilename);
 
     // 3. Update product in DB
     await productModel.updateProductById(id, { image: relativeImagePath });
@@ -570,17 +575,8 @@ const deleteProductImage = async ({ id, deleterId, ipAddress }) => {
 
     const previousImage = product.image;
 
-    // 3. Remove file from disk if stored locally in /uploads/
-    if (typeof previousImage === 'string' && previousImage.startsWith('/uploads/')) {
-        const filePath = path.join(__dirname, '../../../', previousImage.replace(/^\/+/, ''));
-        if (fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch (err) {
-                console.error('Failed to delete product image from disk:', err.message);
-            }
-        }
-    }
+    // 3. Remove file from disk if stored locally in /uploads/products/
+    safeRemoveLocalProductImage(previousImage);
 
     // 4. Update database to set image = null
     await productModel.updateProductById(id, { image: null });

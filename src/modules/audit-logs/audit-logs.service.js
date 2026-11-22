@@ -23,6 +23,7 @@ const getAllAuditLogs = async (queryParams = {}) => {
         userId: queryParams.user_id,
         action: queryParams.action,
         tableName: queryParams.table_name,
+        search: queryParams.search ? String(queryParams.search).trim() : undefined,
         startDate: queryParams.start_date,
         endDate: adjustedEndDate,
         limit,

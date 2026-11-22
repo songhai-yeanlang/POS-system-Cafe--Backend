@@ -37,13 +37,13 @@ const getDashboardSummary = async ({ queryParams = {} }) => {
     // Billed Sales = Gross Sales - Discounts
     const billedSalesUsd = Number(Math.max(0, grossSalesUsd - totalDiscountsUsd).toFixed(2));
     // Net Sales = Billed Sales - Total Refunds
-    const netSalesUsd = Number(Math.max(0, billedSalesUsd - totalRefundedUsd).toFixed(2));
+    const netSalesUsd = Number((billedSalesUsd - totalRefundedUsd).toFixed(2));
     // Net Operating Profit = Net Sales - Operating Expenses (No double deduction of refunds)
     const netOperatingProfitUsd = Number((netSalesUsd - totalExpensesUsd).toFixed(2));
 
     const paidOrdersCount = Number(ordersStats.paid_orders_count || 0);
     const aovUsd = paidOrdersCount > 0
-        ? Number((netSalesUsd / paidOrdersCount).toFixed(2))
+        ? Number((Math.max(0, netSalesUsd) / paidOrdersCount).toFixed(2))
         : 0;
 
     return {
@@ -80,7 +80,11 @@ const getSalesTrend = async ({ queryParams = {} }) => {
     const { startDate, endDate } = normalizeDateRange(queryParams.start_date, queryParams.end_date);
     const groupBy = queryParams.group_by || 'day';
 
-    const points = await reportModel.getSalesTrend({ startDate, endDate, groupBy });
+    const rawPoints = await reportModel.getSalesTrend({ startDate, endDate, groupBy });
+    const points = rawPoints.map((p) => ({
+        ...p,
+        orders_count: Number(p.total_orders || 0)
+    }));
 
     let peakPeriod = null;
     let maxSales = -1;

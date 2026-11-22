@@ -118,7 +118,15 @@ const createProductSchema = {
             'any.only': 'Product type must be DRINK, FOOD, or ADDON'
         }),
         description: Joi.string().trim().max(1000).allow(null, '').optional(),
-        image: Joi.string().trim().max(500).allow(null, '').optional(),
+        image: Joi.string()
+            .trim()
+            .max(500)
+            .pattern(/^(?!.*\.\.)(?!.*\\)(\/uploads\/products\/[a-zA-Z0-9._-]+|https?:\/\/.+)$/)
+            .allow(null, '')
+            .optional()
+            .messages({
+                'string.pattern.base': 'Image must be a valid /uploads/products/ path or HTTP(S) URL'
+            }),
         is_active: Joi.boolean().default(true),
         variants: Joi.array().items(variantItemSchema).min(1).required().messages({
             'array.min': 'Product must have at least one variant',
@@ -158,7 +166,15 @@ const updateProductSchema = {
         name: Joi.string().trim().min(1).max(150).optional(),
         product_type: Joi.string().valid('DRINK', 'FOOD', 'ADDON').optional(),
         description: Joi.string().trim().max(1000).allow(null, '').optional(),
-        image: Joi.string().trim().max(500).allow(null, '').optional(),
+        image: Joi.string()
+            .trim()
+            .max(500)
+            .pattern(/^(?!.*\.\.)(?!.*\\)(\/uploads\/products\/[a-zA-Z0-9._-]+|https?:\/\/.+)$/)
+            .allow(null, '')
+            .optional()
+            .messages({
+                'string.pattern.base': 'Image must be a valid /uploads/products/ path or HTTP(S) URL'
+            }),
         is_active: Joi.boolean().optional(),
         variants: Joi.array().items(updateVariantItemSchema).min(1).optional()
     }).min(1).messages({
