@@ -280,8 +280,8 @@ const syncClosedShiftExpectedCash = async (shiftId, connection = pool) => {
     const netCashUsd = Math.round((cashUsdIn - cashUsdChange) * 100) / 100;
     const netCashKhr = Math.round((cashKhrIn - cashKhrChange) * 100) / 100;
 
-    const expectedCashUsd = Math.max(0, Math.round((shift.opening_cash_usd + netCashUsd - cashExpensesUsd - cashRefundsUsd) * 100) / 100);
-    const expectedCashKhr = Math.max(0, Math.round((shift.opening_cash_khr + netCashKhr - cashExpensesKhr - cashRefundsKhr) * 100) / 100);
+    const expectedCashUsd = Math.round((shift.opening_cash_usd + netCashUsd - cashExpensesUsd - cashRefundsUsd) * 100) / 100;
+    const expectedCashKhr = Math.round((shift.opening_cash_khr + netCashKhr - cashExpensesKhr - cashRefundsKhr) * 100) / 100;
 
     await connection.query(
         `UPDATE shifts SET expected_cash_usd = ?, expected_cash_khr = ? WHERE id = ? AND status = 'CLOSED'`,
@@ -334,6 +334,26 @@ const deleteShiftById = async (shiftId) => {
                 [orderIds]
             );
             await connection.query('DELETE FROM order_items WHERE order_id IN (?)', [orderIds]);
+
+            // Restore discount_codes.used_count for non-cancelled orders in this shift
+            const [discountRows] = await connection.query(
+                `SELECT discount_code_id, COUNT(*) AS used_in_shift
+                 FROM orders
+                 WHERE shift_id = ? AND status != 'CANCELLED' AND discount_code_id IS NOT NULL
+                 GROUP BY discount_code_id`,
+                [shiftId]
+            );
+            for (const dRow of discountRows) {
+                const decCount = Number(dRow.used_in_shift || 0);
+                if (decCount > 0) {
+                    await connection.query(
+                        `UPDATE discount_codes
+                         SET used_count = GREATEST(0, CAST(used_count AS SIGNED) - ?)
+                         WHERE id = ?`,
+                        [decCount, dRow.discount_code_id]
+                    );
+                }
+            }
         }
 
         await connection.query('DELETE FROM refunds WHERE shift_id = ?', [shiftId]);

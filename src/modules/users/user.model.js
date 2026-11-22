@@ -140,7 +140,16 @@ const deleteUserById = async (id, fallbackUserId = null) => {
         // Preserve historical audit logs by setting user_id to NULL before deleting user
         await connection.query('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?', [id]);
 
-        if (fallbackUserId) {
+        let targetFallbackId = fallbackUserId;
+        if (!targetFallbackId) {
+            const [ownerRows] = await connection.query(
+                "SELECT id FROM users WHERE id != ? AND role = 'OWNER' AND is_active = TRUE ORDER BY id ASC LIMIT 1",
+                [id]
+            );
+            targetFallbackId = ownerRows[0]?.id || null;
+        }
+
+        if (targetFallbackId) {
             // Auto-close any OPEN shift of the deleted user first so uq_shifts_one_open_per_user is never violated
             await connection.query(
                 `UPDATE shifts SET
@@ -154,15 +163,16 @@ const deleteUserById = async (id, fallbackUserId = null) => {
                 [id]
             );
 
-            await connection.query('UPDATE orders SET cashier_id = ? WHERE cashier_id = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE orders SET cancelled_by = ? WHERE cancelled_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE orders SET discount_approved_by = ? WHERE discount_approved_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE shifts SET user_id = ? WHERE user_id = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE expenses SET created_by = ? WHERE created_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE expenses SET voided_by = ? WHERE voided_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE payments SET received_by = ? WHERE received_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE refunds SET approved_by = ? WHERE approved_by = ?', [fallbackUserId, id]);
-            await connection.query('UPDATE stock_movements SET created_by = ? WHERE created_by = ?', [fallbackUserId, id]);
+            await connection.query('UPDATE orders SET cashier_id = ? WHERE cashier_id = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE orders SET cancelled_by = ? WHERE cancelled_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE orders SET discount_approved_by = ? WHERE discount_approved_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE discount_codes SET created_by = ? WHERE created_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE shifts SET user_id = ? WHERE user_id = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE expenses SET created_by = ? WHERE created_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE expenses SET voided_by = ? WHERE voided_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE payments SET received_by = ? WHERE received_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE refunds SET approved_by = ? WHERE approved_by = ?', [targetFallbackId, id]);
+            await connection.query('UPDATE stock_movements SET created_by = ? WHERE created_by = ?', [targetFallbackId, id]);
         }
 
         const [result] = await connection.query('DELETE FROM users WHERE id = ?', [id]);
@@ -202,28 +212,35 @@ const checkUserHasTransactions = async (id) => {
     );
     if (shifts.length > 0) return true;
 
-    // 3. Check expenses created
+    // 3. Check expenses created or voided
     const [expenses] = await pool.query(
-        'SELECT id FROM expenses WHERE created_by = ? LIMIT 1',
-        [id]
+        'SELECT id FROM expenses WHERE created_by = ? OR voided_by = ? LIMIT 1',
+        [id, id]
     );
     if (expenses.length > 0) return true;
 
-    // 4. Check payments received
+    // 4. Check discount codes created
+    const [discountCodes] = await pool.query(
+        'SELECT id FROM discount_codes WHERE created_by = ? LIMIT 1',
+        [id]
+    );
+    if (discountCodes.length > 0) return true;
+
+    // 5. Check payments received
     const [payments] = await pool.query(
         'SELECT id FROM payments WHERE received_by = ? LIMIT 1',
         [id]
     );
     if (payments.length > 0) return true;
 
-    // 5. Check refunds approved
+    // 6. Check refunds approved
     const [refunds] = await pool.query(
         'SELECT id FROM refunds WHERE approved_by = ? LIMIT 1',
         [id]
     );
     if (refunds.length > 0) return true;
 
-    // 6. Check stock movements
+    // 7. Check stock movements
     const [stocks] = await pool.query(
         'SELECT id FROM stock_movements WHERE created_by = ? LIMIT 1',
         [id]

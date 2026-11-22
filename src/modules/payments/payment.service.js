@@ -5,6 +5,11 @@ const paymentModel = require('./payment.model');
 const shiftModel = require('../shifts/shift.model');
 const auditLogsModel = require('../audit-logs/audit-logs.model');
 const ApiError = require('../../utils/api-error');
+const {
+    checkApprovalRateLimit,
+    recordApprovalFailure,
+    clearApprovalFailures
+} = require('../../middlewares/rate-limiter');
 
 const buildStockMovementKey = (baseKey, suffix) => {
     const combined = `${baseKey}-${suffix}`;
@@ -108,20 +113,25 @@ const processPayment = async ({ user, paymentData, ipAddress }) => {
         }
 
         // Change calculation
+        const targetChangeCurrency = paymentData.change_currency || currency;
         if (paymentData.change_usd !== undefined || paymentData.change_khr !== undefined) {
             // Explicit override from cashier interface
             changeUsd = Number(paymentData.change_usd) || 0;
             changeKhr = Number(paymentData.change_khr) || 0;
-        } else if (paymentData.change_currency === 'KHR' || (currency === 'USD' && paymentData.change_currency === 'KHR')) {
-            // Cross-currency change in KHR
+        } else if (currency === 'USD' && targetChangeCurrency === 'KHR') {
+            // USD cash payment with cross-currency change in KHR
             changeUsd = 0;
             changeKhr = Math.round((receivedAmount - amount) * exchangeRate);
+        } else if (currency === 'KHR' && targetChangeCurrency === 'USD') {
+            // KHR cash payment with cross-currency change in USD
+            changeUsd = Number(((receivedAmount - amount) / exchangeRate).toFixed(2));
+            changeKhr = 0;
         } else if (currency === 'KHR') {
-            // KHR cash payment with default KHR change
+            // KHR cash payment with KHR change
             changeUsd = 0;
             changeKhr = Math.round(receivedAmount - amount);
         } else {
-            // USD cash payment with default USD change
+            // USD cash payment with USD change
             changeUsd = Number((receivedAmount - amount).toFixed(2));
             changeKhr = 0;
         }
@@ -386,10 +396,14 @@ const getAllPayments = async ({ queryParams = {} }) => {
 
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 
@@ -478,11 +492,17 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
         if (!approverUser) {
             throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
         }
-    } else if (providedPassword) {
+    } else if (providedPassword && String(providedPassword).trim()) {
+        const rateLimitKey = `refund:${user.id || ipAddress || 'anon'}`;
+        checkApprovalRateLimit(rateLimitKey);
+
         // Staff provided an OWNER password: find matching active OWNER automatically
         const activeOwners = await paymentModel.findAllActiveOwners();
         let matchedOwner = null;
         for (const owner of activeOwners) {
+            if (refundData.approved_by && Number(owner.id) !== Number(refundData.approved_by)) {
+                continue;
+            }
             const isMatch = await bcrypt.compare(String(providedPassword), owner.password_hash);
             if (isMatch) {
                 matchedOwner = owner;
@@ -490,18 +510,32 @@ const processRefund = async ({ user, refundData, paymentIdParam, ipAddress }) =>
             }
         }
         if (!matchedOwner) {
+            recordApprovalFailure(rateLimitKey);
+            try {
+                await auditLogsModel.insertAuditLog({
+                    userId: user.id,
+                    action: 'REFUND_APPROVAL_FAILED',
+                    tableName: 'refunds',
+                    recordId: payment.id,
+                    details: {
+                        order_id: payment.order_id,
+                        payment_id: payment.id,
+                        receipt_no: payment.receipt_no,
+                        reason: 'Invalid OWNER approval password for refund'
+                    },
+                    ipAddress
+                });
+            } catch (err) {
+                console.error('Failed to write audit log for failed refund approval:', err.message);
+            }
             throw ApiError.forbidden('Invalid OWNER approval password for refund');
         }
+        clearApprovalFailures(rateLimitKey);
         approverId = matchedOwner.id;
     } else {
-        if (!refundData.approved_by) {
-            throw ApiError.forbidden('Staff members require approval from an active OWNER to process a refund. Please provide owner_password or approved_by.');
-        }
-        approverId = Number(refundData.approved_by);
-        const approverUser = await paymentModel.findActiveOwnerById(approverId);
-        if (!approverUser) {
-            throw ApiError.badRequest(`Approver #${approverId} is not an active OWNER user`);
-        }
+        throw ApiError.forbidden(
+            'Staff members require an active OWNER approval password to process a refund.'
+        );
     }
 
     const reason = refundData.reason ? refundData.reason.trim() : '';
@@ -628,10 +662,14 @@ const getAllRefunds = async ({ queryParams = {} }) => {
 
     let adjustedEndDate = queryParams.end_date;
     if (adjustedEndDate) {
-        const d = new Date(adjustedEndDate);
-        if (!isNaN(d.getTime())) {
-            d.setHours(23, 59, 59, 999);
-            adjustedEndDate = d;
+        if (typeof adjustedEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(adjustedEndDate.trim())) {
+            adjustedEndDate = `${adjustedEndDate.trim()} 23:59:59.999`;
+        } else {
+            const d = new Date(adjustedEndDate);
+            if (!isNaN(d.getTime())) {
+                d.setHours(23, 59, 59, 999);
+                adjustedEndDate = d;
+            }
         }
     }
 

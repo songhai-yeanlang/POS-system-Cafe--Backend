@@ -23,11 +23,13 @@ const reportRoutes = require('./modules/reports/report.route');
 const discountRoutes = require('./modules/discount-codes/discount-code.route');
 const app = express();
 
-app.set('trust proxy', 1);
+app.set('trust proxy', env.trustProxy);
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
-app.use(cors());
+app.use(cors({
+    origin: env.corsOrigin
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

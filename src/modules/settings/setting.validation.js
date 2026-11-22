@@ -13,9 +13,16 @@ const updateSettingsSchema = {
         phone: Joi.string().trim().max(30).allow(null, '').optional().messages({
             'string.max': 'Phone cannot exceed 30 characters'
         }),
-        logo: Joi.string().trim().max(500).allow(null, '').optional().messages({
-            'string.max': 'Logo URL/path cannot exceed 500 characters'
-        }),
+        logo: Joi.string()
+            .trim()
+            .max(500)
+            .pattern(/^(?!.*\.\.)(?!.*\\)(\/uploads\/logo\/[a-zA-Z0-9._-]+|https?:\/\/.+)$/)
+            .allow(null, '')
+            .optional()
+            .messages({
+                'string.max': 'Logo URL/path cannot exceed 500 characters',
+                'string.pattern.base': 'Logo must be a valid /uploads/logo/ path or HTTP(S) URL'
+            }),
         exchange_rate: Joi.number().positive().precision(6).optional().messages({
             'number.base': 'Exchange rate must be a valid number',
             'number.positive': 'Exchange rate must be greater than 0'
@@ -36,6 +43,7 @@ const VALID_CLEAR_TARGETS = [
     'ORDERS',
     'SHIFTS',
     'EXPENSES',
+    'DISCOUNT_CODES',
     'INVENTORY',
     'STOCK_MOVEMENTS',
     'RECIPES',

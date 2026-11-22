@@ -336,58 +336,79 @@ const changePassword = async ({ userId, currentPassword, newPassword, ipAddress 
     return true;
 };
 
+const forgotPasswordCooldowns = new Map();
+
 const forgotPassword = async ({ email, ipAddress }) => {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cooldownSeconds = 60;
+
+    // 1. Uniform cooldown check (prevents email enumeration between existing and non-existing accounts)
+    const lastRequestedAt = forgotPasswordCooldowns.get(cleanEmail);
+    if (lastRequestedAt) {
+        const elapsedSeconds = Math.floor((Date.now() - lastRequestedAt) / 1000);
+        if (elapsedSeconds < cooldownSeconds) {
+            const secondsLeft = Math.max(1, cooldownSeconds - elapsedSeconds);
+            throw ApiError.badRequest(`Please wait ${secondsLeft} seconds before requesting a new OTP.`);
+        }
+        forgotPasswordCooldowns.delete(cleanEmail);
+    }
+
     const user = await authModel.findUserByEmail(email);
     if (!user || !user.is_active) {
+        forgotPasswordCooldowns.set(cleanEmail, Date.now());
         return {
             message: 'OTP has been sent to your email'
         };
     }
 
-    // 3. Cooldown protection: Check if user requested an OTP less than 60 seconds ago
-    const activeReset = await authModel.findActiveResetByEmail(email);
-    if (activeReset) {
-        const elapsedSeconds = activeReset.seconds_since_created !== undefined && activeReset.seconds_since_created !== null
-            ? Number(activeReset.seconds_since_created)
-            : Math.floor((Date.now() - new Date(activeReset.created_at).getTime()) / 1000);
-        const cooldownSeconds = 60;
+    // 2. DB Cooldown protection: Check if user requested an OTP less than 60 seconds ago
+    const latestReset = await authModel.findLatestResetByEmail(email);
+    if (latestReset) {
+        const elapsedSeconds = latestReset.seconds_since_created !== undefined && latestReset.seconds_since_created !== null
+            ? Number(latestReset.seconds_since_created)
+            : Math.floor((Date.now() - new Date(latestReset.created_at).getTime()) / 1000);
         if (elapsedSeconds < cooldownSeconds) {
             const secondsLeft = Math.max(1, cooldownSeconds - elapsedSeconds);
             throw ApiError.badRequest(`Please wait ${secondsLeft} seconds before requesting a new OTP.`);
         }
     }
 
-    // 4. Invalidate previous active requests for this user
-    await authModel.invalidatePreviousResets(user.id);
-
-    // 5. Generate 6-digit OTP
+    // 3. Generate 6-digit OTP & hash with bcrypt
     const otp = crypto.randomInt(100000, 1000000).toString();
-
-    // 5. Hash OTP with bcrypt
     const salt = await bcrypt.genSalt(10);
     const otpHash = await bcrypt.hash(otp, salt);
 
-    // 6. Save to database with 10-minute expiration computed on DB clock
-    await authModel.createPasswordReset({
+    // 4. Save to database with 10-minute expiration computed on DB clock
+    const createdResetId = await authModel.createPasswordReset({
         userId: user.id,
         email: user.email,
         otpHash,
         expiryMinutes: 10
     });
 
-    // 8. Send OTP to user's email
-    await mailer.sendResetPasswordOtp({
-        to: user.email,
-        name: user.name,
-        otp
-    });
+    // 5. Send OTP to user's email; roll back newly created reset record if SMTP fails
+    try {
+        await mailer.sendResetPasswordOtp({
+            to: user.email,
+            name: user.name,
+            otp
+        });
+    } catch (mailError) {
+        await authModel.deletePasswordResetById(createdResetId);
+        forgotPasswordCooldowns.delete(cleanEmail);
+        throw mailError;
+    }
 
-    // 9. Audit log
+    // 6. Invalidate previous active requests for this user only after email succeeds
+    await authModel.invalidatePreviousResets(user.id, createdResetId);
+    forgotPasswordCooldowns.set(cleanEmail, Date.now());
+
+    // 7. Audit log
     await logAudit({
         userId: user.id,
         action: 'FORGOT_PASSWORD_REQUEST',
         tableName: 'password_resets',
-        recordId: null,
+        recordId: createdResetId,
         details: { email: user.email },
         ipAddress
     });
@@ -400,9 +421,9 @@ const forgotPassword = async ({ email, ipAddress }) => {
 };
 
 const verifyOtp = async ({ email, otp, ipAddress }) => {
-    // 1. Find active reset record for this email
+    // 1. Find active unverified reset record for this email
     const reset = await authModel.findActiveResetByEmail(email);
-    if (!reset) {
+    if (!reset || reset.reset_token) {
         throw ApiError.badRequest('No active password reset request found or OTP has expired. Please request a new OTP.');
     }
 
@@ -422,8 +443,11 @@ const verifyOtp = async ({ email, otp, ipAddress }) => {
     // 4. Generate secure reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
 
-    // 5. Save reset token in database
-    await authModel.saveResetToken(reset.id, resetToken);
+    // 5. Save reset token in database (atomically ensures OTP is only verified once)
+    const tokenSaved = await authModel.saveResetToken(reset.id, resetToken);
+    if (!tokenSaved) {
+        throw ApiError.badRequest('No active password reset request found or OTP has expired. Please request a new OTP.');
+    }
 
     // 6. Audit log
     await logAudit({
@@ -451,6 +475,10 @@ const resetPassword = async ({ resetToken, newPassword, ipAddress }) => {
     const user = await authModel.findUserByIdWithPassword(reset.user_id);
     if (!user) {
         throw ApiError.notFound('User associated with this reset token not found');
+    }
+
+    if (!user.is_active) {
+        throw ApiError.forbidden('Your account has been deactivated');
     }
 
     // 3. Prevent setting the same password

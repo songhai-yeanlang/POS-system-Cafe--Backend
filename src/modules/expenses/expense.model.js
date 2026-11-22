@@ -252,8 +252,8 @@ const updateExpenseById = async (id, fields = {}, connection = pool) => {
         setClauses.push('shift_id = ?');
         params.push(fields.shiftId);
     }
-    if (fields.incurredAt !== undefined) {
-        setClauses.push('incurred_at = ?');
+    if (fields.incurredAt !== undefined && fields.incurredAt !== null) {
+        setClauses.push('incurred_at = COALESCE(?, incurred_at)');
         params.push(fields.incurredAt);
     }
 

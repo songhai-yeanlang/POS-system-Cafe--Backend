@@ -501,6 +501,24 @@ const isVariantUsedInOrders = async (variantId, connection = null) => {
     return Number(rows[0]?.total || 0) > 0;
 };
 
+const isVariantUsedInOpenOrders = async (variantId, connection = null) => {
+    const db = connection || pool;
+    const [rows] = await db.query(
+        `SELECT
+            (SELECT COUNT(*)
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             WHERE oi.variant_id = ? AND o.status = 'OPEN') +
+            (SELECT COUNT(*)
+             FROM order_item_addons oia
+             JOIN order_items oi ON oi.id = oia.order_item_id
+             JOIN orders o ON o.id = oi.order_id
+             WHERE oia.addon_variant_id = ? AND o.status = 'OPEN') AS total`,
+        [variantId, variantId]
+    );
+    return Number(rows[0]?.total || 0) > 0;
+};
+
 const deleteProductById = async (id, connection = null) => {
     const ownConnection = !connection;
     const db = connection || (await pool.getConnection());
@@ -555,6 +573,48 @@ const isProductUsedInOrders = async (productId, connection = null) => {
     return Number(rows[0]?.total || 0) > 0;
 };
 
+const isProductUsedInOpenOrders = async (productId, connection = null) => {
+    const db = connection || pool;
+    const [rows] = await db.query(
+        `SELECT
+            (SELECT COUNT(*)
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             JOIN product_variants pv ON pv.id = oi.variant_id
+             WHERE pv.product_id = ? AND o.status = 'OPEN') +
+            (SELECT COUNT(*)
+             FROM order_item_addons oia
+             JOIN order_items oi ON oi.id = oia.order_item_id
+             JOIN orders o ON o.id = oi.order_id
+             JOIN product_variants pv ON pv.id = oia.addon_variant_id
+             WHERE pv.product_id = ? AND o.status = 'OPEN') AS total`,
+        [productId, productId]
+    );
+    return Number(rows[0]?.total || 0) > 0;
+};
+
+const isCategoryUsedInOpenOrders = async (categoryId, connection = null) => {
+    const db = connection || pool;
+    const [rows] = await db.query(
+        `SELECT
+            (SELECT COUNT(*)
+             FROM order_items oi
+             JOIN orders o ON o.id = oi.order_id
+             JOIN product_variants pv ON pv.id = oi.variant_id
+             JOIN products p ON p.id = pv.product_id
+             WHERE p.category_id = ? AND o.status = 'OPEN') +
+            (SELECT COUNT(*)
+             FROM order_item_addons oia
+             JOIN order_items oi ON oi.id = oia.order_item_id
+             JOIN orders o ON o.id = oi.order_id
+             JOIN product_variants pv ON pv.id = oia.addon_variant_id
+             JOIN products p ON p.id = pv.product_id
+             WHERE p.category_id = ? AND o.status = 'OPEN') AS total`,
+        [categoryId, categoryId]
+    );
+    return Number(rows[0]?.total || 0) > 0;
+};
+
 module.exports = {
     findAllCategories,
     findCategoryByName,
@@ -576,7 +636,10 @@ module.exports = {
     updateVariantById,
     deleteVariantById,
     isVariantUsedInOrders,
+    isVariantUsedInOpenOrders,
     deleteProductById,
-    isProductUsedInOrders
+    isProductUsedInOrders,
+    isProductUsedInOpenOrders,
+    isCategoryUsedInOpenOrders
 };
 
